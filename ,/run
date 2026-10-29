@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+# run: the learners, every relevant moot csv, in parallel.
+# usage: ./run nb|rmeans|rmeansall|lgbm|tabicl|tabpfn|results
+#               |figures|fresh [P]
+# Scores land in $CACHE; tab-eg.lua and lgbm.py skip any file
+# already written (force=y to insist), so re-runs are cheap.
+#
+# The retired Makefile (attic/Makefile) split freshness two ways:
+# timestamps were make's job, so "an input moved, the old scores are
+# void" was a rule that DELETED them, while "this arm has no scores
+# yet" stayed an existence test in the lua and the python.  Make
+# invalidated; lua rebuilt.  One stamp per language, so editing lua
+# never voided an hour of LightGBM runs.  None of that survives here:
+# the only invalidation left is `fresh`, which deletes everything.
+# Re-read that file before trusting a stale cache/.
+Self="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+cd "$(dirname "$Self")/.." || exit 1  # the repo root
+TAB=${TAB:-$(cd ../tab 2>/dev/null && pwd)}
+MOOT=${MOOT:-$HOME/gits/moot}
+CACHE=${CACHE:-$PWD/cache}
+NN=${NN:-$HOME/tmp/nnenv/bin/python}
+P=${2:-8}
+export TAB MOOT CACHE
+# charts.py and lgbm.py read $CACHE; tab-eg.lua still hardcodes
+# ~/tmp/cache, so the lua arms write there whatever this says.
+[ -d "$TAB" ] || { echo "no tab checkout at ${TAB:-../tab}" >&2; exit 1; }
+EG="$TAB/tab-eg.lua"
+# -S 8192: BSD xargs assembles at most 255 bytes per -I line, and
+# silently drops the rest of the work when a path makes it longer.
+go()  { xargs -P "$P" -S 8192 -I{} "$@" >/dev/null; }
+go4() { xargs -P 4      -S 8192 -I{} "$@" >/dev/null; }
+
+case "${1:-help}" in
+  nb)        ls "$MOOT"/classify/*.csv \
+             | go luajit "$EG" go=nb file={} ;;
+
+  rmeans)    ls "$MOOT"/optimize/*/*.csv "$MOOT"/regression/*.csv \
+             | go luajit "$EG" go=rmeans file={} ;;
+
+  rmeansall) ls "$MOOT"/optimize/*/*.csv "$MOOT"/regression/*.csv \
+             | go luajit "$EG" go=rmeansall file={} ;;
+
+  lgbm)      ls "$MOOT"/classify/*.csv "$MOOT"/optimize/*/*.csv \
+                "$MOOT"/regression/*.csv \
+             | go python3 etc/lgbm.py {} ;;
+
+  # The in-context models hold the training set in memory, so these
+  # run 4 wide, not 8: at 8 the kernel OOM-killed mnist_1, and xargs
+  # aborts the whole queue on a signal-9 child.  nn.py also caps the
+  # rows it will feed a model (CAP=15000).
+  tabicl|tabpfn)
+             [ -x "$NN" ] || { echo "no venv at $NN" >&2; exit 1; }
+             ls "$MOOT"/classify/*.csv "$MOOT"/regression/*.csv \
+             | OMP_NUM_THREADS=2 go4 "$NN" etc/nn.py "$1" {} ;;
+
+  results)   for x in nb rmeans rmeansall lgbm; do "$0" "$x" "$P"; done ;;
+
+  figures)   "$NN" etc/charts.py ;;   # matplotlib is in the venv
+
+  fresh)     rm -rf "$CACHE" ;;
+
+  *)         grep '^#' "$Self" | sed 's/^# *//' ;;
+esac

@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# sh: a work shell for tab-dev. usage: ,/sh
+# TAB points at the sibling checkout of timm/tab, NOT at an installed
+# rock: luarocks make copies the file, so a rock would need a
+# reinstall after every edit.  This way an edit in ../tab is live.
+Here="$(cd "$(dirname "$0")/.." && pwd)"
+export TAB=${TAB:-$(cd "$Here/../tab" 2>/dev/null && pwd)}
+export MOOT=${MOOT:-$HOME/gits/moot}
+export CACHE=${CACHE:-$Here/cache}
+export LUA_PATH="$TAB/?.lua;$Here/etc/?.lua;;"
+export PATH="$Here/,:$PATH"
+[ -d "$TAB" ] || echo "warning: no tab checkout at $TAB" >&2
+exec bash --init-file <(cat <<EOF
+[ -f ~/.bashrc ] && . ~/.bashrc
+cd "$Here"
+. "$Here/etc/prompt.bash" 2>/dev/null
+alias t='luajit \$TAB/tab.lua'
+alias eg='luajit \$TAB/tab-eg.lua'
+alias hpo='luajit etc/hpo.lua'
+alias ..='cd ..'
+if ls --color=auto . >/dev/null 2>&1
+then Ls='ls --color=auto'
+else Ls='ls -G'; export CLICOLOR=1
+     export LSCOLORS=ExGxFxdaCxDaDahbadacec
+fi
+alias ls="\$Ls"
+alias l="\$Ls -lh"
+alias ll="\$Ls -lhA"
+HISTCONTROL=ignoredups:erasedups
+shopt -s histappend checkwinsize
+C=\$(tput setaf 6 2>/dev/null); G=\$(tput setaf 2 2>/dev/null)
+D=\$(tput setaf 8 2>/dev/null); R=\$(tput sgr0 2>/dev/null)
+echo ""
+echo " \${C}    _______  \${G}t a b - d e v\${R}"
+echo " \${C}   /      /,  \${D}experiments on \$TAB\${R}"
+echo " \${C}  /      //\${R}"
+echo " \${C} /______//\${R}"
+echo " \${C}(______(/\${R}"
+echo ""
+EOF
+)
