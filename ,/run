@@ -28,7 +28,10 @@ EG="$TAB/tab-eg.lua"
 # -S 8192: BSD xargs assembles at most 255 bytes per -I line, and
 # silently drops the rest of the work when a path makes it longer.
 go()  { xargs -P "$P" -S 8192 -I{} "$@" >/dev/null; }
-go4() { xargs -P 4      -S 8192 -I{} "$@" >/dev/null; }
+# The in-context models are the memory hogs: one worker on a 1M-cell
+# set peaked near 6GB, so four at once is 24GB on a 24GB machine --
+# which is how mnist_1 filled 32GB of swap.  Two, unless NNP says.
+gonn() { xargs -P "${NNP:-2}" -S 8192 -I{} "$@" >/dev/null; }
 
 case "${1:-help}" in
   nb)        ls "$MOOT"/classify/*.csv \
@@ -45,13 +48,18 @@ case "${1:-help}" in
              | go python3 etc/lgbm.py {} ;;
 
   # The in-context models hold the training set in memory, so these
-  # run 4 wide, not 8: at 8 the kernel OOM-killed mnist_1, and xargs
-  # aborts the whole queue on a signal-9 child.  nn.py also caps the
-  # rows it will feed a model (CAP=15000).
+  # run 2 wide, not 8: at 8 the kernel OOM-killed mnist_1, and xargs
+  # aborts the whole queue on a signal-9 child.  nn.py declines a set
+  # twice over: CAP=950000 cells for memory, ROWS=15000 for time.
+  # optimize comes first because it is the corpus the figures need,
+  # and a queue spends its first hours on whatever it is handed first.
+  # printf and not ls, because ls sorts all of its operands together
+  # and would hand back one alphabetical list, losing that order.
   tabicl|tabpfn)
              [ -x "$NN" ] || { echo "no venv at $NN" >&2; exit 1; }
-             ls "$MOOT"/classify/*.csv "$MOOT"/regression/*.csv \
-             | OMP_NUM_THREADS=2 go4 "$NN" etc/nn.py "$1" {} ;;
+             printf '%s\n' "$MOOT"/optimize/*/*.csv \
+                "$MOOT"/classify/*.csv "$MOOT"/regression/*.csv \
+             | OMP_NUM_THREADS=2 gonn "$NN" etc/nn.py "$1" {} ;;
 
   results)   for x in nb rmeans rmeansall lgbm; do "$0" "$x" "$P"; done ;;
 

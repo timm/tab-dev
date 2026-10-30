@@ -26,20 +26,22 @@ def pair(t, s):
   n    = int(.8 * len(rows))
   return M.clone(t, rows[:n]), M.clone(t, rows[n:])
 
-def goal(t):
-  "One num goal: it.  Else: ydist, the distance to heaven."
-  c = t.cols.y[0] if len(t.cols.y) == 1 else None
-  if c is None or type(c) is not M.NUM: return lambda r: M.ydist(t, r)
-  return lambda r: c.mu if r[c.at] == "?" else float(r[c.at])
+def goal(t, file):
+  "Regression: that one column, in its own units.  Else: ydist."
+  c = t.cols.y[0] if "/regression/" in file and len(t.cols.y) == 1 else None
+  if c is None or type(c) is not M.NUM:
+    return lambda r: M.ydist(t, r)   # 0 is best whatever col.w says, and
+  return lambda r: c.mu if r[c.at] == "?" else float(r[c.at])  # mae then
+                                     # compares across sets
 
-def xy(t, i, klass):
+def xy(t, i, klass, file):
   "Numbers in, label out.  Syms map through I, shared by the splits."
   X, y = [], []
   for r in t.rows:
     X.append([float("nan")                       if r[c.at] == "?" else
               i.setdefault((c.at, r[c.at]), len(i)) if type(c) is M.SYM else
               float(r[c.at])                     for c in t.cols.x])
-    y.append(str(r[klass.at]) if klass else goal(t)(r))
+    y.append(str(r[klass.at]) if klass else goal(t, file)(r))
   return X, y
 
 def macro(want, got):
@@ -80,7 +82,7 @@ def klassOf(t, file):
 def main(file):
   "Score LightGBM on every rep, unless that was already done."
   out = f"{home(file)}/lgbm.csv"
-  if os.path.exists(out): print(out); return
+  if os.path.exists(out) and not os.getenv("FORCE"): print(out); return
   os.makedirs(home(file), exist_ok=True)
   t     = M.Tbl(file)
   klass = klassOf(t, file)
@@ -90,8 +92,8 @@ def main(file):
   for s in range(1, Reps + 1):
     tr, te = pair(t, s)
     i      = {}
-    X1, y1 = xy(tr, i, klass)
-    X2, y2 = xy(te, i, klass)
+    X1, y1 = xy(tr, i, klass, file)
+    X2, y2 = xy(te, i, klass, file)
     t0     = time.time()
     model  = (LGBMClassifier if klass else LGBMRegressor)(verbose=-1)
     model.fit(X1, y1)

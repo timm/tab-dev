@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# overnight: run an arm detached, so it outlives this terminal.
+# usage: ,/overnight tabicl        then: tail -f .run.log
+cd "$(git rev-parse --show-toplevel)" || exit 1
+export TAB=${TAB:-$(cd ../tab && pwd)} MOOT=${MOOT:-$HOME/gits/moot}
+export CACHE=${CACHE:-$PWD/cache}
+nohup ,/run "${1:-tabicl}" > .run.log 2>&1 &   # no setsid on macos
+disown 2>/dev/null
+echo "$! started; log: $PWD/.run.log"

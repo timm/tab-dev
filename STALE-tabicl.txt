@@ -1,0 +1,16 @@
+# tabicl.csv written before the 2026-10-29 08:32 goal() patch:
+# mae is in raw y units, not ydist.  rank also wrong where the goal is +.
+# rerun: FORCE=1 python3 etc/nn.py tabicl $MOOT/optimize/<set>.csv
+optimize/behavior_data/student_dropout
+optimize/behavior_data/player_statistics_cleaned_final
+optimize/config/rs-6d-c3_obj2
+optimize/config/sol-6d-c2-obj1
+optimize/config/wc+wc-3d-c4-obj1
+optimize/config/rs-6d-c3_obj1
+optimize/config/Apache_AllMeasurements
+optimize/config/HSMGP_num
+optimize/config/wc+rs-3d-c4-obj1
+optimize/config/SQL_AllMeasurements
+optimize/config/wc-6d-c1-obj1
+optimize/config/X264_AllMeasurements
+optimize/config/wc+sol-3d-c4-obj1

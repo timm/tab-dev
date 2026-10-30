@@ -42,8 +42,11 @@ def cells(dir, who, col):
 
 def sets(kind, need):
   "Every cached KIND set holding all of NEED, as (name, dir)."
+  # moot/optimize nests one level deeper than the others, so look at
+  # both depths; a group dir holds no csvs and drops out by itself.
   out = []
-  for d in sorted(glob.glob(f"{Cache}/{kind}/*")):
+  for d in sorted(glob.glob(f"{Cache}/{kind}/*")
+                  + glob.glob(f"{Cache}/{kind}/*/*")):
     if all(os.path.exists(f"{d}/{w}.csv") for w in need):
       out.append((os.path.basename(d), d))
   return out
@@ -83,6 +86,8 @@ def save(f, ax, name, title, xlab, ylab, rot=90, size=7):
 
 # Sets called out on the x axis of labels.png and top5.png.  Override
 # with MARK="a,b,c"; MARK="" turns it off.
+MaeNear = float(os.getenv("MAENEAR", 5))   # grey band, raw mae
+
 Mark = set(filter(None, os.getenv("MARK",
   "fried,stock,bodyfat,cpu.small,cpu.act,mv,pollution,2dplanes,"
   "gascons,detroit,bolts").split(",")))
@@ -203,14 +208,23 @@ def gain():
   f.savefig(f"{Docs}/gain.png", bbox_inches="tight"); plt.close(f)
   print(f"{Docs}/gain.png")
 
-def labels():
+def labels(kind="regression", name="labels", vs="lgbm"):
   "Raw MAE on moot/regression: 45 labels against everyone's all."
   who = arms(["rmeans", "rmeansall", "lgbm"])
-  S   = sets("regression", ["rmeans", "rmeansall", "lgbm"])
+  S   = sets(kind, ["rmeans", "rmeansall", "lgbm"])
   med = {w: {n: st.median(cells(d, w, "mae") or [float("nan")])
              for n, d in S} for w in who}
-  tie = {n: M.same(cells(d, "rmeans", "mae"), cells(d, "lgbm", "mae"))
-         for n, d in S}
+  # Grey marks "no real difference from rmeans on 45 labels".  Against
+  # lgbm that is the three effect-size tests; against anything else it
+  # is MaeNear, in raw mae units.  Mind that mae spans six orders of
+  # magnitude here, so one flat window is generous on the small sets
+  # and strict on the large.
+  def near(d):
+    a, b = cells(d, "rmeans", "mae"), cells(d, vs, "mae")
+    if not a or not b: return False
+    if vs == "lgbm":   return M.same(a, b)
+    return abs(st.median(a) - st.median(b)) <= MaeNear
+  tie = {n: near(d) for n, d in S}
   S.sort(key=lambda nd: med["rmeansall"][nd[0]] - med["lgbm"][nd[0]])
   names = [n for n, _ in S]
   f, ax = fig(13, 6)
@@ -224,24 +238,25 @@ def labels():
             label=lab, zorder=3)
   ax.set_yscale("log")
   ax.set_xticks(range(len(names)))
-  ax.set_xticklabels([f"{n} ({int(.8*rows(n,'regression'))})"
+  ax.set_xticklabels([f"{n} ({int(.8*rows(n,kind))})"
                       for n in names])
   for t, n in zip(ax.get_xticklabels(), names):
     if tie[n]: t.set_color("#999999")
   mark(ax, names)
   ax.plot([], [], lw=8, color="#e8e8e8",
-          label="45 labels == LightGBM (cohen, cliffs, ks)")
+          label="45 labels == LightGBM (cohen, cliffs, ks)" if vs == "lgbm"
+          else f"45 labels within {MaeNear:g} mae of {Look[vs][3]}")
   ax.legend(frameon=False, fontsize=10, loc="upper left")
-  save(f, ax, "labels", "rmeans on 45 labels vs every row of the 80%"
+  save(f, ax, name, "rmeans on 45 labels vs every row of the 80%"
        " split, against LightGBM",
-       f"{len(names)} moot/regression sets (training rows available),"
+       f"{len(names)} moot/{kind} sets (training rows available),"
        " sorted by rmeans(all) - lgbm",
        "raw MAE, median of 20 seeds  (log)")
 
-def top5():
+def top5(kind="regression", name="top5"):
   "Label only each arm's top 5: how good is the best of those?"
   who = arms(["rmeans", "rmeansall", "lgbm"])
-  S   = sets("regression", ["rmeans", "rmeansall"])
+  S   = sets(kind, ["rmeans", "rmeansall"])
   med = {w: {n: (lambda v: st.median(v) if v else float("nan"))(
                  cells(d, w, "rank")) for n, d in S} for w in who}
   S.sort(key=lambda nd: med["rmeans"][nd[0]])
@@ -259,13 +274,13 @@ def top5():
             label=f"{lab}  ({sum(1 for y in ok if y<=5)}/{len(ok)}"
                   " inside 5%)", zorder=3)
   ax.set_xticks(range(len(names)))
-  ax.set_xticklabels([f"{n} ({int(.2*rows(n,'regression'))})"
+  ax.set_xticklabels([f"{n} ({int(.2*rows(n,kind))})"
                       for n in names])
   mark(ax, names)
   ax.set_ylim(bottom=0)
   ax.legend(frameon=False, fontsize=10, loc="upper left")
-  save(f, ax, "top5", "Label only the top 5 of each ranking:"
-       " how good is the best one?",
+  save(f, ax, name, f"Label only the top 5 of each ranking:"
+       f" how good is the best one?   [moot/{kind}]",
        "data sets (test rows), sorted by the 45-label result",
        "best of our top 5, as a percentile of the test set\n"
        "(0 = we found the very best row)")
@@ -315,11 +330,12 @@ def secs():
 
 def raw():
   "Absolute seconds per run, each task on its own panel."
-  mine = (("classify", "nb72"), ("regression", "rmeans"))
+  mine = (("classify", "nb72"), ("regression", "rmeans"),
+          ("optimize", "rmeans"))
   who  = arms(["lgbm"], ("tabicl", "tabpfn")) + ["tab"]
   Look["tab"] = ("#1f5f9e", "-", "o",
                "tab nb+rmeans (bins=7,m=2)")
-  f, ax = plt.subplots(1, 2, figsize=(13, 5.8), dpi=200, sharey=True)
+  f, ax = plt.subplots(1, 3, figsize=(18, 5.8), dpi=200, sharey=True)
   for k, (kind, ours) in enumerate(mine):
     a, cur = ax[k], {w: [] for w in who}
     S = sets(kind, ["lgbm", ours])
@@ -386,5 +402,8 @@ def cost():
        "seconds, mean of 20 seeds  (log)", rot=0, size=9)
 
 if __name__ == "__main__":
-  jobs = sys.argv[1:] or ["clas", "labels", "top5", "secs", "cost", "raw"]
-  for j in jobs: globals()[j]()
+  extra = {"optlabels": lambda: labels("optimize", "optlabels", vs="tabicl"),
+           "opt":       lambda: top5("optimize", "opt")}
+  jobs = sys.argv[1:] or ["clas", "labels", "top5", "optlabels", "opt",
+                          "secs", "cost", "raw"]
+  for j in jobs: (extra.get(j) or globals()[j])()
