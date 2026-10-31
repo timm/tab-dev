@@ -11,6 +11,7 @@ usage: python3 ,/nn.py tabicl f.csv   (writes <cache>/<set>/tabicl.csv)
 import os, sys, time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import min as M
+from score import aucs  # one auc for every arm, so they compare
 
 Cache = os.path.expanduser(os.getenv("CACHE", "~/tmp/cache"))
 Reps  = int(os.getenv("REPS", 20))
@@ -114,7 +115,10 @@ def klassOf(t, file):
 
 def main(who, file):
   "Score WHO on every rep, unless that was already done."
-  out = f"{home(file)}/{who}.csv"
+  # AUC=1 writes <who>auc.csv and leaves <who>.csv alone: the two are
+  # different questions of the same model, not two versions of one.
+  auc = bool(os.getenv("AUC"))
+  out = f"{home(file)}/{who}{'auc' if auc else ''}.csv"
   if os.path.exists(out) and not os.getenv("FORCE"): print(out); return
   os.makedirs(home(file), exist_ok=True)
   t     = M.Tbl(file)
@@ -128,6 +132,8 @@ def main(who, file):
   klass = klassOf(t, file)
   if "/classify/" in file and not klass:
     print(f"{file}: no discrete ! column, skipped", file=sys.stderr); return
+  if auc and not klass:
+    print(f"{file}: AUC wants a klass, skipped", file=sys.stderr); return
   model = arms(who, klass)     # once: rep 1 pays the checkpoint load
   lines = []
   for s in range(1, Reps + 1):
@@ -137,13 +143,18 @@ def main(who, file):
     X2, y2 = xy(te, i, klass, file)
     t0     = time.time()
     model.fit(X1, y1)
-    got    = list(model.predict(X2))
+    if auc:
+      line = aucs(model, X2, y2)
+    else:
+      got  = list(model.predict(X2))
+      line = (macro(y2, got) if klass else
+              f"{rank(y2, got):.3f},"
+              f"{sum(abs(a-b) for a, b in zip(y2, got)) / len(y2):.3f}")
     secs   = time.time() - t0
-    lines.append(f"{s},{secs:.4f}," + (macro(y2, got) if klass else
-      f"{rank(y2, got):.3f},"
-      f"{sum(abs(a-b) for a, b in zip(y2, got)) / len(y2):.3f}"))
+    lines.append(f"{s},{secs:.4f},{line}")
   with open(out, "w") as f:
-    f.write("rep,secs," + ("acc,pd,pf,d2h" if klass else "rank,mae") + "\n")
+    f.write("rep,secs," + ("auc,klasses" if auc else
+                           "acc,pd,pf,d2h" if klass else "rank,mae") + "\n")
     f.write("\n".join(lines) + "\n")
   print(out)
 

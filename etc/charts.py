@@ -401,9 +401,153 @@ def cost():
        "training rows (80% of the set)  (log)",
        "seconds, mean of 20 seeds  (log)", rot=0, size=9)
 
+# ---- auc ------------------------------------------------------------
+# tab.lua's SAME.ok, in python: two samples are the same when all three
+# tests say so.  Thresholds are tab's, not retuned here.
+def same(xs,ys):
+  "True when XS and YS are one sample by cohen, cliffs and ks alike."
+  a, b = sorted(xs), sorted(ys)
+  if len(a) < 2 or len(b) < 2: return False
+  sd = ((len(a)-1)*st.pstdev(a)**2 + (len(b)-1)*st.pstdev(b)**2)
+  sd = (sd / (len(a)+len(b)-2)) ** .5
+  if abs(st.fmean(a) - st.fmean(b)) / (sd + 1e-32) > .35: return False
+  gt = lt = j = k = 0                                      # cliffs delta
+  for x in a:
+    while j < len(b) and b[j] <  x: j += 1; k = j
+    while k < len(b) and b[k] == x: k += 1
+    gt, lt = gt + j, lt + len(b) - k
+  if abs(gt - lt) / (len(a)*len(b)) > .195: return False
+  p = q = d = 0                                            # kolmogorov
+  while p < len(a) and q < len(b):
+    v = min(a[p], b[q])
+    while p < len(a) and a[p] == v: p += 1
+    while q < len(b) and b[q] == v: q += 1
+    d = max(d, abs(p/len(a) - q/len(b)))
+  return d / ((len(a)+len(b)) / (len(a)*len(b))) ** .5 <= 1.36
+
+def auc():
+  """auc on every moot/classify set: does the pd gap survive ranking?
+
+  pd and d2h score one threshold; auc scores the whole ordering.  pd
+  itself is clas.png's story, so only auc is drawn here, grouped by
+  klass count the same way clas.png groups.
+
+  A set leaves when some rep produced no auc at all -- every klass
+  missing positives from that test split, so the macro mean is a mean
+  over nothing -- or when both arms sit below chance, having no
+  ordering to rank.  Set AUCALL=1 to keep 3-5 klasses only.
+  """
+  who = tuple(["nbauc", "lgbmauc"]
+              + [w for w in ("tabiclauc", "tabpfnauc")
+                 if glob.glob(f"{Cache}/classify/*/{w}.csv")])
+  S   = sets("classify", ["nbauc", "lgbmauc"])
+  if os.getenv("AUC35"): S = [(n,d) for n,d in S if 3 <= klasses(n) <= 5]
+  keep, gone = [], []
+  for n, d in S:
+    ks = [k for w in who if (k := cells(d, w, "klasses"))]
+    au = [st.fmean(a) for w in who if (a := cells(d, w, "auc"))]
+    if min(min(k) for k in ks) > 0 and max(au) >= .5: keep.append((n, d))
+    else: gone.append(n)
+  print(f"  auc: kept {len(keep)} of {len(S)}; dropped {' '.join(gone)}")
+  raw = {w: {n: v for n, d in keep if (v := cells(d, w, "auc"))}
+         for w in who}
+  med = {w: {n: st.fmean(v) for n, v in d.items()} for w, d in raw.items()}
+  has = lambda w, n: n in med[w]          # an arm that declined this set
+  grp = {n: (0 if klasses(n) == 2 else 1 if klasses(n) <= 5 else 2)
+         for n, _ in keep}
+  keep.sort(key=lambda nd: (grp[nd[0]],
+                            med[who[0]][nd[0]]
+                            - max(med[w][nd[0]] for w in who[1:]
+                                  if has(w, nd[0]))))
+  names = [n for n, _ in keep]
+  edge  = [j for j in range(1, len(names))         # where a group ends
+           if grp[names[j]] != grp[names[j - 1]]]
+  def ends(n):
+    "The lowest and highest scoring arms that ran on set N."
+    ws = sorted((w for w in who if has(w, n)), key=lambda w: med[w][n])
+    return raw[ws[0]][n], raw[ws[-1]][n]
+  tie   = {n: same(*ends(n)) for n in names}
+  # The pooled sd of the two arms' 20 reps: the denominator cohen's d
+  # divides by, and so the scale that says whether a gap above is real.
+  def pooled(n,    a=None, b=None):
+    a, b = ends(n)
+    return (((len(a)-1)*st.pstdev(a)**2 + (len(b)-1)*st.pstdev(b)**2)
+            / (len(a)+len(b)-2)) ** .5
+  for w in who: Look[w] = Look[w[:-3]]   # nbauc draws as nb72 does
+  Look["nbauc"] = Look["nb72"]
+  # A thin strip of its own, not a second scale on the first: sd and
+  # auc do not share units, and one axis per panel is the rule.
+  f, (ax, sx) = plt.subplots(2, 1, figsize=(13, 7), dpi=200, sharex=True,
+                             gridspec_kw=dict(height_ratios=[4, 1],
+                                              hspace=.08))
+  for a in (ax, sx):
+    a.spines[["top", "right"]].set_visible(False)
+    a.grid(axis="y", color="#eeeeee", zorder=0)
+  for a in (ax, sx):
+    for j, n in enumerate(names):     # the two arms are one sample here
+      if tie[n]: a.axvspan(j - .5, j + .5, color="#ececec", lw=0, zorder=0)
+    for j in edge: a.axvline(j - .5, color="#999999", lw=1, zorder=2)
+  # auc floors at .5, not 0: below that line is what a coin would score.
+  ax.axhline(.5, color="#999999", ls=":", lw=1, zorder=2)
+  ax.text(len(names) - .5, .5, " chance", ha="left", va="center",
+          fontsize=9, color="#666666")
+  for w in who:
+    col, ls, mk, lab = Look[w]
+    ax.plot(range(len(names)),
+            [med[w][n] if has(w, n) else float("nan") for n in names],
+            ls, color=col,
+            marker=mk or "o", ms=4, lw=1.4,
+            label=lab, zorder=3)
+  ax.set_ylim(0, 1)
+  for lo, hi, lab in zip([0] + edge, edge + [len(names)],
+                         ("2 klasses", "3-5 klasses", "6+ klasses")):
+    if hi > lo:
+      ax.text((lo + hi - 1) / 2, .02, f"{lab}  (n={hi - lo})",
+              transform=ax.get_xaxis_transform(), ha="center", va="bottom",
+              fontsize=9, color="#555555")
+  ax.plot([], [], lw=8, color="#ececec",
+          label="grey: one sample (cohen, cliffs and ks all agree)")
+  ax.legend(frameon=False, fontsize=10, ncol=3, loc="lower center",
+            bbox_to_anchor=(.5, 1.10))
+  wins = sum(1 for n in names
+             if med[who[0]][n] >= max(med[w][n] for w in who if has(w, n)))
+  ax.text(0, 1.015, "mean over sets:   " + "      ".join(
+            "{} {:.3g}{}".format(Look[w][3], st.fmean(
+              [med[w][n] for n in names if has(w, n)]),
+              "" if len(med[w]) == len(names)
+                 else f" (on {len(med[w])})") for w in who)
+          + "      least==most on {} of {};   naive Bayes best on {}".format(
+              sum(tie.values()), len(names), wins),
+          transform=ax.transAxes, ha="left", va="bottom", fontsize=10.5,
+          color="#333333")
+  sds = [pooled(n) for n in names]
+  sx.bar(range(len(names)), sds, width=.62, color="#9aa5ad", lw=0,
+         zorder=3)
+  sx.set_ylim(0, max(sds) * 1.15)
+  sx.set_ylabel("pooled sd", fontsize=9)
+  sx.tick_params(axis="y", labelsize=8)
+  sx.text(0, 1.04, "pooled sd of the least and most arms:  median {:.3f}"
+                   "   max {:.3f} ({})".format(
+            st.median(sds), max(sds), names[sds.index(max(sds))]),
+          transform=sx.transAxes, ha="left", va="bottom", fontsize=9,
+          color="#555555")
+  ax.set_ylabel("auc  (higher better)", fontsize=11)
+  sx.set_xticks(range(len(names)))
+  sx.set_xticklabels(names)
+  sx.tick_params(axis="x", labelsize=6.5, rotation=90)
+  sx.set_xlabel(f"{len(names)} moot/classify sets,"
+                " sorted by the auc gap inside each group",
+                fontsize=11, labelpad=12)
+  # pad clears the legend, which sits above the axes, not inside it.
+  ax.set_title("Ranking closes most of the gap that pd opens\n"
+               "(each point is one set's mean over 20 random 80:20"
+               " splits)", fontsize=13, pad=58)
+  f.savefig(f"{Docs}/auc.png", bbox_inches="tight"); plt.close(f)
+  print(f"{Docs}/auc.png")
+
 if __name__ == "__main__":
   extra = {"optlabels": lambda: labels("optimize", "optlabels", vs="tabicl"),
            "opt":       lambda: top5("optimize", "opt")}
   jobs = sys.argv[1:] or ["clas", "labels", "top5", "optlabels", "opt",
-                          "secs", "cost", "raw"]
+                          "secs", "cost", "raw", "auc"]
   for j in jobs: (extra.get(j) or globals()[j])()

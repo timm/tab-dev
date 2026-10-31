@@ -9,6 +9,7 @@ usage: python3 ,/lgbm.py f.csv        (writes <cache>/<set>/lgbm.csv)
 import os, sys, time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import min as M
+from score import aucs
 from lightgbm import LGBMClassifier, LGBMRegressor
 
 Cache = os.path.expanduser(os.getenv("CACHE", "~/tmp/cache"))
@@ -81,7 +82,8 @@ def klassOf(t, file):
 
 def main(file):
   "Score LightGBM on every rep, unless that was already done."
-  out = f"{home(file)}/lgbm.csv"
+  who = "lgbmauc" if os.getenv("AUC") else "lgbm"
+  out = f"{home(file)}/{who}.csv"
   if os.path.exists(out) and not os.getenv("FORCE"): print(out); return
   os.makedirs(home(file), exist_ok=True)
   t     = M.Tbl(file)
@@ -97,13 +99,18 @@ def main(file):
     t0     = time.time()
     model  = (LGBMClassifier if klass else LGBMRegressor)(verbose=-1)
     model.fit(X1, y1)
-    got    = list(model.predict(X2))
+    if who == "lgbmauc":
+      line = aucs(model, X2, y2)
+    else:
+      got  = list(model.predict(X2))
+      line = (macro(y2, got) if klass else
+              f"{rank(y2, got):.3f},"
+              f"{sum(abs(a-b) for a,b in zip(y2,got))/len(y2):.6g}")
     secs   = time.time() - t0
-    lines.append(f"{s},{secs:.4f}," + (macro(y2, got) if klass else
-      f"{rank(y2, got):.3f},"
-      f"{sum(abs(a-b) for a,b in zip(y2,got))/len(y2):.6g}"))
+    lines.append(f"{s},{secs:.4f},{line}")
   with open(out, "w") as f:
-    f.write("rep,secs," + ("acc,pd,pf,d2h" if klass else "rank,mae") + "\n")
+    f.write("rep,secs," + ("auc,klasses" if who == "lgbmauc" else
+                           "acc,pd,pf,d2h" if klass else "rank,mae") + "\n")
     f.write("\n".join(lines) + "\n")
   print(out)
 
