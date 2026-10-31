@@ -13,6 +13,7 @@ import min as M
 from math import log, exp
 import matplotlib; matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib.ticker import MultipleLocator
 
 Cache = os.path.expanduser(os.getenv("CACHE", "~/tmp/cache"))
 Docs  = os.getenv("DOCS") or os.path.join(os.path.dirname(
@@ -21,14 +22,16 @@ Moot  = os.path.expanduser("~/gits/moot")
 
 # one look per arm: colour, line style, marker, legend name
 Look = {
-  "nb":        ("#a6cee3", "-",  "o", "naive Bayes (self-tuned)"),
+  "nb":        ("#9ad7fb", "-",  "o", "naive Bayes (self-tuned)"),
   "rmeans":    ("#a6cee3", "-",  "o", "rmeans, 45 labels"),
   "rmeansall": ("#1f5f9e", "-",  "o", "rmeans, every row"),
   "nb50":      ("#1f5f9e", "--", "D", "naive Bayes, 50 labels"),
-  "nb72":      ("#a6cee3", "-",  "o", "naive Bayes (bins=7, m=2)"),
-  "lgbm":      ("#d9661f", "-",  "o", "LightGBM"),
-  "tabicl":    ("#6a3d9a", "-",  "s", "TabICLv2"),
-  "tabpfn":    ("#e7298a", "--", "^", "TabPFN-3")}
+  "nb72":      ("#9ad7fb", "-",  "o", "naive Bayes (bins=7, m=2)"),
+  "lgbm":      ("#e9622e", "-",  "o", "LightGBM"),
+  "tabicl":    ("#860c4f", "-",  "s", "TabICLv2"),
+  "tabpfn":    ("#e7298a", "--", "^", "TabPFN-3"),
+  "treemaj":   ("#d9661f", "-",  "o", "tree, majority at the leaf"),
+  "treenb":    ("#6a3d9a", "-",  "s", "tree, naive Bayes at the leaf")}
 
 def cells(dir, who, col):
   "Column COL of DIR's WHO.csv, one number per rep."
@@ -39,6 +42,27 @@ def cells(dir, who, col):
   if at is None: return None
   try:    return [float(r[at]) for r in rows[1:]]
   except (ValueError, IndexError): return None
+
+# Red and bold on a chart's x axes marks the sets where its two
+# arms part by at least this many pd points.  Computed, not listed,
+# so the marks are reproducible and mean one definite thing; and
+# computed once on pd, so the same sets stay marked across pd, pf
+# and auc even though each panel sorts them differently.
+PdMark = float(os.getenv("PDMARK", 10))
+
+def aucs(dir, who):
+  """DIR's WHO auc, one per rep, skipping the reps that have none.
+
+  A split whose test rows all share one klass leaves every
+  one-against-the-rest with no negatives, so there is no auc to
+  report.  aucs() writes `0,0` there -- a zero klass count is the
+  sentinel.  Averaging that zero in would score a missing
+  measurement as a total failure, which is how six tiny sets came
+  to look like every learner's worst case.
+  """
+  au, ks = cells(dir, who, "auc"), cells(dir, who, "klasses")
+  if not au or not ks: return None
+  return [a for a, k in zip(au, ks) if k > 0] or None
 
 def sets(kind, need):
   "Every cached KIND set holding all of NEED, as (name, dir)."
@@ -92,10 +116,10 @@ Mark = set(filter(None, os.getenv("MARK",
   "fried,stock,bodyfat,cpu.small,cpu.act,mv,pollution,2dplanes,"
   "gascons,detroit,bolts").split(",")))
 
-def mark(ax, names):
+def mark(ax, names, which=None):
   "Red and bold on the called-out sets.  Runs last, so it wins."
   for t, n in zip(ax.get_xticklabels(), names):
-    if n in Mark:
+    if n in (Mark if which is None else which):
       t.set_color("#c0392b")
       t.set_fontweight("bold")
 
@@ -445,11 +469,11 @@ def auc():
   keep, gone = [], []
   for n, d in S:
     ks = [k for w in who if (k := cells(d, w, "klasses"))]
-    au = [st.fmean(a) for w in who if (a := cells(d, w, "auc"))]
+    au = [st.fmean(a) for w in who if (a := aucs(d, w))]
     if min(min(k) for k in ks) > 0 and max(au) >= .5: keep.append((n, d))
     else: gone.append(n)
   print(f"  auc: kept {len(keep)} of {len(S)}; dropped {' '.join(gone)}")
-  raw = {w: {n: v for n, d in keep if (v := cells(d, w, "auc"))}
+  raw = {w: {n: v for n, d in keep if (v := aucs(d, w))}
          for w in who}
   med = {w: {n: st.fmean(v) for n, v in d.items()} for w, d in raw.items()}
   has = lambda w, n: n in med[w]          # an arm that declined this set
@@ -507,8 +531,8 @@ def auc():
               fontsize=9, color="#555555")
   ax.plot([], [], lw=8, color="#ececec",
           label="grey: one sample (cohen, cliffs and ks all agree)")
-  ax.legend(frameon=False, fontsize=10, ncol=3, loc="lower center",
-            bbox_to_anchor=(.5, 1.10))
+  ax.legend(frameon=False, fontsize=10, ncol=len(who) + 1,
+            loc="lower center", bbox_to_anchor=(.5, 1.07))
   wins = sum(1 for n in names
              if med[who[0]][n] >= max(med[w][n] for w in who if has(w, n)))
   ax.text(0, 1.015, "mean over sets:   " + "      ".join(
@@ -539,15 +563,166 @@ def auc():
                 " sorted by the auc gap inside each group",
                 fontsize=11, labelpad=12)
   # pad clears the legend, which sits above the axes, not inside it.
-  ax.set_title("Ranking closes most of the gap that pd opens\n"
+  ax.set_title("TabICL leads; naive Bayes and LightGBM split the rest\n"
                "(each point is one set's mean over 20 random 80:20"
-               " splits)", fontsize=13, pad=58)
+               " splits)", fontsize=13, pad=74)
   f.savefig(f"{Docs}/auc.png", bbox_inches="tight"); plt.close(f)
   print(f"{Docs}/auc.png")
+
+def panels(name, who, vs, title, lead):
+  """Three stacked panels -- pd, pf, auc -- for the arms in WHO.
+
+  Every panel splits the sets into 2, 3-5 and 6+ klass bands, then
+  orders each band by its own metric's gap from the first arm to VS.
+  Each panel carries its own x labels, because a column is a
+  different set in each.  Grey marks where that metric says those
+  two arms are one sample, and the strip under auc pools that same
+  pair's sd, so a gap can be read against the spread that made it.
+  """
+  base  = who[0]
+  Short = {"nb": "nb", "treenb": "tree+nb", "lgbm": "LightGBM",
+           "tabicl": "TabICLv2"}
+  S  = sets("classify", list(who) + [w + "auc" for w in who])
+  Of = (("pd",  "pd",  "",    1, (0, 100), .03, 20, 5),
+        ("pf",  "pf",  "",   -1, (0, 64),  .93, 20, 5),
+        ("auc", "auc", "auc", 1, (0, 1),   .03, .2, .05))
+  raw = {}
+  for n, d in S:
+    v = {}
+    for col, _, suf, _, _, _, _, _ in Of:
+      for w in who:
+        r = aucs(d, w + suf) if col == "auc" else cells(d, w + suf, col)
+        if not r: break
+        v[w, col] = r
+      else: continue
+      break
+    else: raw[n] = v
+  mu  = {n: {k: st.fmean(v) for k, v in d.items()} for n, d in raw.items()}
+  big = {n for n in raw
+         if abs(mu[n][vs, "pd"] - mu[n][base, "pd"]) >= PdMark}
+  grp = lambda n: 0 if klasses(n) == 2 else 1 if klasses(n) <= 5 else 2
+  f   = plt.figure(figsize=(13, 14), dpi=200)
+  gs  = f.add_gridspec(len(Of), 1, hspace=.62, height_ratios=[4, 4, 5])
+  sub = gs[len(Of) - 1].subgridspec(2, 1, hspace=.07, height_ratios=[4, 1])
+  ax  = [f.add_subplot(gs[j]) for j in range(len(Of) - 1)] \
+        + [f.add_subplot(sub[0])]
+  sx  = f.add_subplot(sub[1])
+  for a, (lab, col, suf, up, lim, at, maj, mnr) in zip(ax, Of):
+    names = sorted(raw, key=lambda n: (grp(n),
+                     up * (mu[n][vs, col] - mu[n][base, col])))
+    edge  = [j for j in range(1, len(names))
+             if grp(names[j]) != grp(names[j - 1])]
+    tie   = [j for j, n in enumerate(names)
+             if same(raw[n][base, col], raw[n][vs, col])]
+    win   = {w: sum(1 for n in names
+                    if up * (mu[n][w, col] - mu[n][base, col]) > 0)
+             for w in who[1:]}
+    a.spines[["top", "right"]].set_visible(False)
+    a.yaxis.set_major_locator(MultipleLocator(maj))
+    a.yaxis.set_minor_locator(MultipleLocator(mnr))
+    # above the one-sample bands, which are near the grid's own grey
+    # and would otherwise swallow the rules they cross.
+    a.grid(axis="y", which="major", color="#c9c9c9", lw=.9, zorder=1.6)
+    a.grid(axis="y", which="minor", color="#dedede", lw=.6, zorder=1.5)
+    for j in tie:
+      a.axvspan(j - .5, j + .5, color="#ececec", lw=0, zorder=0)
+    for j in edge:
+      a.axvline(j - .5, color="#999999", lw=.8, zorder=2)
+    for w in who:
+      c, ls, mk, nm = Look[w]
+      a.plot(range(len(names)), [mu[n][w, col] for n in names], ls,
+             color=c, marker=mk, ms=3.5, lw=1.3, label=nm, zorder=3)
+    a.set_ylabel("{}  ({} better)".format(lab,
+                 "higher" if up > 0 else "lower"), fontsize=10)
+    if lim: a.set_ylim(*lim)
+    a.set_xlim(-1, len(names))
+    a.set_xticks(range(len(names)))
+    a.tick_params(axis="x", labelsize=6, rotation=90)
+    a.text(0, 1.015, "mean:   " + "   ".join(
+             "{} {:.3g}".format(Short[w], st.fmean(mu[n][w, col]
+                                                   for n in names))
+             for w in who)
+           + "      beats {}: ".format(Short[base])
+           + ", ".join("{} {}".format(Short[w], win[w]) for w in who[1:])
+           + ", of {};   {} and {} one sample on {}".format(
+               len(names), Short[base], Short[vs], len(tie)),
+           transform=a.transAxes, ha="left", va="bottom", fontsize=9.5,
+           color="#333333")
+    for lo, hi, g in zip([0] + edge, edge + [len(names)],
+                         ("2 klasses", "3-5 klasses", "6+ klasses")):
+      if hi > lo:
+        a.text((lo + hi - 1) / 2, at, "{}  (n={})".format(g, hi - lo),
+               transform=a.get_xaxis_transform(), ha="center",
+               va="bottom", fontsize=8.5, color="#555555")
+    if col != "auc":
+      a.set_xticklabels(names); mark(a, names, big); continue
+    a.set_xticklabels([])             # auc's labels go under the strip
+    sds = [(((len(x) - 1) * st.pstdev(x) ** 2
+              + (len(y) - 1) * st.pstdev(y) ** 2)
+            / (len(x) + len(y) - 2)) ** .5
+           for n in names
+           for x, y in [(raw[n][base, col], raw[n][vs, col])]]
+    sx.spines[["top", "right"]].set_visible(False)
+    for j in tie:
+      sx.axvspan(j - .5, j + .5, color="#ececec", lw=0, zorder=0)
+    for j in edge:
+      sx.axvline(j - .5, color="#999999", lw=.8, zorder=2)
+    sx.bar(range(len(names)), sds, width=.62, color="#9aa5ad", lw=0,
+           zorder=3)
+    sx.set_xlim(-1, len(names)); sx.set_ylim(0, max(sds) * 1.15)
+    sx.set_ylabel("pooled sd", fontsize=9)
+    sx.tick_params(axis="y", labelsize=8)
+    sx.set_xticks(range(len(names))); sx.set_xticklabels(names)
+    sx.tick_params(axis="x", labelsize=6, rotation=90)
+    mark(sx, names, big)
+    # inside the auc panel, where nothing is drawn: the strip's own
+    # top edge is the auc axis, and a caption there collides.
+    a.text(0, .13, "pooled sd below, of {} and {}:   median {:.3f}"
+                   "   max {:.3f} ({})".format(
+             Short[base], Short[vs], st.median(sds), max(sds),
+             names[sds.index(max(sds))]),
+           transform=a.transAxes, ha="left", va="bottom", fontsize=9,
+           color="#555555")
+  ax[0].plot([], [], lw=8, color="#ececec",
+             label="grey: {} and {} are one sample"
+                   " (cohen, cliffs and ks all agree)".format(
+                     Short[base], Short[vs]))
+  ax[0].legend(frameon=False, fontsize=10, ncol=len(who) + 1,
+               loc="lower center", bbox_to_anchor=(.5, 1.10))
+  sx.set_xlabel("{} moot/classify sets, split into klass bands, each"
+                " band sorted by its own {}-to-{} gap\n"
+                "red: the {} sets where the two part by {:g} pd points"
+                " or more".format(len(raw), Short[base], Short[vs],
+                                  len(big), PdMark),
+                fontsize=11, labelpad=10)
+  ax[0].set_title(title + "\n" + lead, fontsize=13, pad=54)
+  f.savefig(f"{Docs}/{name}.png", bbox_inches="tight"); plt.close(f)
+  print(f"{Docs}/{name}.png")
+
+def naming():
+  "Look's own names are older than the rigs; say what the arms are."
+  # ,/run passes no flags, so nb.csv is tab's own bins=7, m=2 -- the
+  # same settings the tree's leaves use.
+  Look["nb"]     = Look["nb"][:3] + ("naive Bayes (bins=7, m=2)",)
+  Look["treenb"] = ("#16827d", "-", "s", "tree, naive Bayes at the leaf")
+
+def tree():
+  "The split, on its own: does cutting the rows first buy anything?"
+  naming()
+  panels("tree", ("nb", "treenb"), "treenb",
+         "Does splitting first help a naive Bayes?",
+         "(each point is one set's mean over 20 random 80:20 splits)")
+
+def arms():
+  "Naive Bayes against a booster and a foundation model."
+  naming()
+  panels("arms", ("nb", "lgbm", "tabicl"), "tabicl",
+         "How far behind is a naive Bayes?",
+         "(each point is one set's mean over 20 random 80:20 splits)")
 
 if __name__ == "__main__":
   extra = {"optlabels": lambda: labels("optimize", "optlabels", vs="tabicl"),
            "opt":       lambda: top5("optimize", "opt")}
   jobs = sys.argv[1:] or ["clas", "labels", "top5", "optlabels", "opt",
-                          "secs", "cost", "raw", "auc"]
+                          "secs", "cost", "raw", "auc", "tree", "arms"]
   for j in jobs: (extra.get(j) or globals()[j])()

@@ -206,6 +206,133 @@ cut into.  Same rig, `m` held at 2:
   advance which, and the sets that care sit at the right of the
   figure, where every setting already scores badly.
 
+## Does splitting first help a naive Bayes?
+
+![tree](docs/tree.png)
+
+A binary tree grown on klass entropy -- the same cut search as the
+regression tree, with `Sym` collecting the scores so `div` is
+entropy rather than sd -- with a naive Bayes fitted inside each
+leaf.  Depth scales with the klass count, so the tree always has at
+least one leaf per klass; at a fixed depth of 4 a majority vote
+over 8 leaves cannot name soybean's 19 klasses, and would be
+reporting the shape of the tree rather than what it learned.  Both
+arms share one tree per split, so the only thing that differs is
+the answer given at the leaf.  72 `moot/classify` sets.
+
+| arm | pd | pf | auc | ahead of nb on auc |
+|---|---|---|---|---|
+| naive Bayes | **73.0** | **13.8** | **0.869** | -- |
+| tree, NB at the leaf | 70.9 | 15.0 | 0.848 | 27 of 72 |
+
+- **Splitting first does not pay.**  The tree loses on every
+  measure and in every klass band, worst at 6+ klasses (auc 0.869
+  against 0.902, ahead on 6 of 21), which is where the scaled
+  depth leaves each leaf the fewest rows.
+- **Majority-at-the-leaf is worse still** (auc 0.778): the tree can
+  locate a region but cannot label it.  Whatever a split buys, it
+  needs a model to collect.
+- It pays in one place.  `car`, `nursery`, `balance.scale`,
+  `tic-tac-toe` and `kr.vs.kp` define their klass by a rule over
+  several columns at once -- a torque comparison, a win condition,
+  a chess endgame -- and there the tree gains **+7.8 pd** over
+  naive Bayes against **-2.0** everywhere else.  The split buys
+  exactly the thing an additive model cannot represent, and
+  nothing else.
+
+## How far behind is a naive Bayes?
+
+![arms](docs/arms.png)
+
+The same three panels against a gradient booster and a foundation
+model, on the 67 sets all three completed.
+
+| arm | pd | pf | auc | ahead of nb on auc |
+|---|---|---|---|---|
+| naive Bayes | 74.5 | 14.1 | 0.872 | -- |
+| LightGBM | 76.1 | 14.1 | 0.868 | 35 of 67 |
+| TabICLv2 | **81.2** | **11.6** | **0.908** | 57 of 67 |
+
+- naive Bayes and LightGBM are a tie -- 0.872 against 0.868, and
+  LightGBM ahead on 35 of 67, which is a coin toss.  The whole of
+  the deficit sits in the 3-5 klass band (0.872 against 0.889); at
+  two klasses naive Bayes is *ahead* (0.846 against 0.826).
+- TabICL leads, with 48 separated wins and 4 separated losses once
+  `SAME` sets the one-sample cases aside.  It buys more on pf than
+  on pd: fewer false alarms rather than more hits.
+
+## Can we say in advance where a simple learner fails?
+
+Red on the x axes of both figures marks the sets where the two
+arms being compared part by at least 10 pd points: 11 sets in the
+tree figure, 19 in the rival figure.  The rule is computed, not
+chosen, so the marks mean one definite thing.
+
+Nothing about the shape of those 19 sets predicts that they are
+the ones to part:
+
+| property | red | rest | cliffs |
+|---|---|---|---|
+| rows | 625 | 345 | +0.12 |
+| x columns | 12 | 18.5 | -0.22 |
+| symbolic fraction | 0.74 | 0.75 | +0.01 |
+| klasses | 3 | 2 | +0.15 |
+| majority klass share | 0.52 | 0.57 | -0.15 |
+| **synergy** | **-0.0014** | **-0.0123** | **+0.48** |
+
+The last row is the only one that moves, and it is the only
+measure here that is a statement about naive Bayes's own
+assumption rather than about the data's shape.  **Synergy** -- how
+much a pair of attributes says about the klass that neither says
+alone, $I(X_i,X_j;Y) - I(X_i;Y) - I(X_j;Y)$, normalized by $H(Y)$
+and with its permutation null subtracted -- is information only a
+model that reads the pair together can reach, and so is exactly
+what an additive learner must discard.
+
+Most sets have *negative* synergy: their columns repeat each
+other, and that is the regime where naive Bayes does fine, because
+double-counting redundant evidence leaves the ranking intact.  The
+sets that part the arms are the ones that are not redundant.
+`car`, `nursery`, `balance.scale`, `tic-tac-toe` and `kr.vs.kp`
+all define their klass by a rule over several columns at once -- a
+torque comparison, a win condition, a chess endgame -- and there
+the tree gains **+7.8 pd** over naive Bayes against **-2.0**
+everywhere else.
+
+Asked a different way, though, synergy is much weaker.  Drop the
+red/rest split and regress it against a continuous outcome -- the
+best rival's auc minus naive Bayes's, over all 67 sets, with no
+grouping anywhere:
+
+| framing | synergy |
+|---|---|
+| red against rest, cliffs | +0.48 |
+| against best-rival-minus-nb auc, spearman | +0.29 |
+
+Both are honest and they are not in conflict: cliffs compares the
+extremes, spearman tracks the whole range.  **Synergy separates
+the ends and barely orders the middle.**  Every shape property
+stays near zero under the continuous framing too (rows +0.14,
+symbolic fraction -0.20, the rest under 0.12), so synergy remains
+the best predictor found.
+
+The negative result is what survives:
+
+- **No property of a dataset's shape predicts whether simple will
+  do.**  Size, width, klass count, symbolic fraction and imbalance
+  all fail, under either framing.
+- **Synergy tells you about the extremes only.**  It is measured
+  pairwise, so it understates targets like `tic-tac-toe` whose
+  rule is a three-way conjunction; and it leaves `anneal`,
+  `hypothyroid`, `page.blocks` and `waveform5000` unexplained --
+  those sets part the arms because the arms are unstable, not
+  because naive Bayes is structurally beaten.
+- So there are two causes with one symptom, and only the extreme
+  cases of one of them are readable off a csv.  A wide spread
+  between arms does not tell you which cause you have.  The advice
+  this document keeps arriving at stands: run the cheap learner,
+  and keep the rig that tells you when it was not enough.
+
 ## What it costs
 
 ![seconds](docs/secs.png)
@@ -359,7 +486,21 @@ a fifty-label budget, in 244 lines, against a current booster.
    the two under `test/`.
 4. `ezr.py` does not import at `537ee93` (`mid()` lost a line
    continuation), so `rcache.py` ran from a patched copy.
-5. Timings are SBCL against Python calling a C++ library, so
+5. A split whose test rows all share one klass leaves every
+   one-against-the-rest with no negatives, so there is no auc to
+   report.  Both `score.py` and `tab-eg.lua` write `0,0` there,
+   a zero klass count being the sentinel, and an early version
+   of `charts.py` averaged that zero as if it were a score.  Six
+   sets were affected -- `shuttle.landing.control` (17 of 20
+   reps), `trains` (9), `weather` (7), `solar.flare2` (5),
+   `solar.flare1` (4), `sponge` (4) -- and every arm equally,
+   since the splits are shared.  It cost `shuttle.landing.control`
+   0.500 auc, read as 0.075, and inflated the pooled sd strip by
+   29% of its total height.  `charts.py` now reads auc only from
+   reps with a nonzero klass count; `auc.png` was never affected,
+   since its drop rule already required one.  Every number in
+   this section is post-fix.
+6. Timings are SBCL against Python calling a C++ library, so
    some of LightGBM's floor is marshalling, not tree building.
    The ezr repo's own `etc/arms.tsv` shows the same shape from a
    different harness (0.571s against 0.024s).
