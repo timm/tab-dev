@@ -1,0 +1,259 @@
+% tab.tex: for Software: Practice and Experience (Wiley NJD class;
+% WileyNJD-v2.cls, NJDnatbib.sty and WileyNJD-AMA.bst sit in this
+% directory -- they are not on CTAN, so tectonic cannot fetch them;
+% everything else tectonic pulls from its bundle on demand).
+% Code arrives via snips/, cut fresh from ../tab's sources by tab's
+% ,/snips (see Makefile): nothing here is pasted, nothing can rot.
+% Bib entries live at the end of this file (filecontents), so this
+% paper's whole footprint is this file, the Makefile and the three
+% Wiley files above.
+\documentclass[AMA,STIX2COL]{WileyNJD-v2}
+\usepackage{listings,xcolor}
+\articletype{Experience Report}
+
+% Code style after the ezr paper (tosem10.tex): very small type, a
+% hairline left rule, line numbers every 5th -- and numbering that
+% runs CONTINUOUSLY across listings, so the paper carries one set of
+% line numbers for the whole toolkit.
+\newcommand{\vtiny}{\fontsize{8}{9}\selectfont}
+\lstset{language={},
+  basicstyle=\vtiny\ttfamily, breaklines=true,
+  postbreak=\mbox{\textcolor{gray}{$\hookrightarrow$}\,},
+  commentstyle=\color{gray}\itshape,
+  keywordstyle=\bfseries,
+  morekeywords={function,local,return,end,if,then,else,elseif,
+                for,while,do,in,and,or,not,nil,true,false},
+  morecomment=[l]{--},
+  columns=fullflexible, keepspaces=true,
+  numbers=left, firstnumber=last, stepnumber=5,
+  numberstyle=\fontsize{4}{4}\selectfont\color{black!50},
+  numbersep=5pt, xleftmargin=8pt,
+  frame=leftline, framerule=0.3pt, rulecolor=\color{black!25},
+  aboveskip=1ex, belowskip=1ex}
+% \snip{NUM.add} pulls the code AND makes Listing~\ref{lst:NUM.add}
+% (and its line numbers) citeable from the prose.
+\newcommand{\snip}[1]{\lstinputlisting[caption={\texttt{#1}},
+  label={lst:#1}]{snips/#1.lua}}
+
+\begin{document}
+\title{tab.lua: a good guess from a few dozen labels}
+\author[1]{Tim Menzies}
+\authormark{MENZIES}
+\address[1]{\orgdiv{Computer Science}, \orgname{North Carolina State
+  University}, \orgaddress{\state{NC}, \country{USA}}}
+\corres{Tim Menzies. \email{timm@ieee.org}}
+
+\abstract[Summary]{On [N] tabular SE data sets, a Naive Bayes
+classifier over seven discretized bins comes within [X]\% of LightGBM
+and TabPFN (by recall and false alarm).  The whole learner is [N]
+lines of Lua with no dependencies; it trains and tests in [T] seconds
+on a laptop.  We describe its design, the experience of keeping it
+small, and the working style it enables: many fast runs, and only an
+occasional slow check against an expensive reference.}
+
+\keywords{naive Bayes, discretization, baselines, Lua, little
+languages, reproducibility}
+
+\maketitle
+
+\section{Introduction}
+
+Every month brings a bigger model.  Every month, last month's results
+look old.
+
+This paper offers a result that will not age so fast.  On [N] tabular
+SE data sets, a Naive Bayes classifier with seven discretized bins
+comes within [X]\% of gradient boosting (GBM, LightGBM) and TabPFN,
+measured by recall (pd) and false alarms (pf).  The whole learner is
+[N] lines of Lua.  It runs in [T] seconds on a laptop.  A student can
+read it in an afternoon.
+
+We do not claim that big tools are useless.  We claim that most of
+the time, they are not needed.  Science works best with many fast
+experiments and only a few slow ones.  So we should run many cheap
+probes and check against an expensive model only now and then.
+
+This is an old idea.  In the 1960s, information systems buried
+managers in reports.  Decision support systems replied with a
+question: what is the least information that most changes a decision?
+AI now buries us in code.  We ask that question again, and we answer
+it in a small language.
+
+We wrote this for three readers:
+\begin{itemize}
+\item Scientists who want results they can repeat on a laptop, and
+  that will still hold after the next model release.
+\item Teachers who need code students can read end to end.
+  Schr\"odinger warned that if you cannot, in the long run, tell
+  everyone what you have been doing, ``your doing has been
+  worthless''~\cite{schrodinger1951science}.  Small code makes that
+  telling possible.
+\item Lua users who already believe a little language, used well,
+  goes a long way~\cite{ierusalimschy1996lua}.  Here is evidence.
+\end{itemize}
+
+Our contributions are:
+\begin{itemize}
+\item An empirical result: a 7-bin Naive Bayes is close to
+  state-of-the-art on pd/pf for [N] data sets.
+\item A method: many fast runs, one slow check.
+\item A tool: tab.lua, [N] lines, no dependencies.
+\item An argument: some results outlast the current model cycle, and
+  we should look for them.
+\end{itemize}
+
+\section{Motivation}
+
+\subsection{Overload, again}
+
+In 1938, Buckminster Fuller described ephemeralization: doing ``more
+and more with less and less''~\cite{fuller1938nine}.  Technology
+delivered that promise, then delivered too much.  Gross gave the
+problem a name in 1964~\cite{gross1964managing}.  Toffler made it
+famous in 1970~\cite{toffler1970future}.  In between, Ackoff saw it
+inside companies.  Managers did not lack relevant information.  They
+drowned in irrelevant information~\cite{ackoff1967misinformation}.
+Simon put it in one line: ``a wealth of information creates a poverty
+of attention''~\cite{simon1971designing}.
+
+The answer then was decision support~\cite{gorry1971framework}.  Do
+not give people every report.  Give them the smallest thing that
+changes what they do next.
+
+LLMs repeat the cycle.  Code and text now cost almost nothing to
+produce.  Reading them, checking them, and trusting them still cost a
+lot.  So the problem has moved from making things to choosing among
+them, and the right response is the old one: find the minimum that
+matters.
+
+\subsection{Locked out of science}
+
+Big models have a second cost: they exclude people.  A result that
+needs a GPU cluster can be checked only by people who have one.  Most
+of the world's scientists, students, and small labs do not.  For
+them, current AI research is something they read about but cannot
+repeat.  When results cannot be repeated by most people, it is hard
+to call them science.
+
+Repetition matters because we all make mistakes.  In 2013 we had a
+paper accepted at MSR on cross-company defect prediction.  It beat
+the prior state of the art.  Within three weeks, before the
+conference started, a graduate student trying to reproduce it found a
+coding error: a bad re-insert of class labels after a distance
+calculation.  Once we fixed it, the result went away.  We reported
+this at the conference.  That error was found because the code was
+small enough to read, and the data was open enough to rerun.  Large,
+opaque, expensive pipelines hide errors like this.  Small, cheap ones
+expose them.
+
+\subsection{The ground keeps moving}
+
+There is a third problem.  Whatever we build on today's model, the
+next model will replace.  A paper tuned to one release has a short
+shelf life.  Researchers end up on a treadmill, spending effort to
+keep up instead of to understand.
+
+So we look for results that do not depend on the current release.
+Some ideas have lasted decades: discretize, count, compare, keep the
+simplest model that works.  A 7-bin Naive Bayes will mean the same
+thing in ten years as it does today.  Its baseline does not expire.
+When a new model arrives, the right question is still ``how much
+better than the simple thing?''  And often the honest answer is ``not
+much.''
+
+\subsection{Little languages, fast runs}
+
+Our tool choice follows from this.  Lua is a small language with a
+small core and few dependencies~\cite{ierusalimschy1996lua}.  It
+changes slowly, so code written years ago still runs.  It encourages
+short scripts that do one thing.
+
+That suits a research style with two speeds:
+\begin{itemize}
+\item Fast: thousands of cheap runs with small learners to explore
+  the option space.
+\item Slow: a few runs against an expensive reference (GBM, LightGBM,
+  TabPFN) to confirm what the fast runs found.
+\end{itemize}
+
+Most of the time goes into the fast loop.  The slow loop is a check,
+not the main tool.
+
+\section{Columns}
+
+Columns summarize streams: counts for symbols, Welford's running mean
+and standard deviation for numbers.
+
+\snip{Sym}
+\snip{SYM.add}
+\snip{Num}
+\snip{NUM.add}
+
+\section{Naive Bayes}
+
+Training is the constructor: one sub-table per klass.
+
+\snip{Nb}
+\snip{NB.like}
+\snip{NB.guess}
+
+\section{Range means}
+
+Distance to heaven labels a row; bins collect those labels; a guess
+is the variance-weighted, shrunken mean of the bins a row falls into.
+
+\snip{TAB.ydist}
+\snip{Bins}
+\snip{BINS.weight}
+\snip{Rmeans}
+\snip{RMEANS.guess}
+
+\nocite{*}
+\bibliography{refs}
+
+% ---- bib entries, loaded at the end of this file -------------------
+\begin{filecontents}[overwrite]{refs.bib}
+@misc{menzies26tab,
+  author = {Tim Menzies},
+  title  = {tab: fast inference over tables},
+  year   = {2026},
+  url    = {https://github.com/timm/tab}}
+@article{ierusalimschy1996lua,
+  author  = {Ierusalimschy, Roberto and de Figueiredo, Luiz Henrique
+             and Celes, Waldemar},
+  title   = {Lua---an extensible extension language},
+  journal = {Software: Practice and Experience},
+  volume  = {26}, number = {6}, pages = {635--652}, year = {1996}}
+@book{schrodinger1951science,
+  author    = {Schr{\"o}dinger, Erwin},
+  title     = {Science and Humanism},
+  publisher = {Cambridge University Press}, year = {1951}}
+@book{fuller1938nine,
+  author    = {Fuller, R. Buckminster},
+  title     = {Nine Chains to the Moon},
+  publisher = {J. B. Lippincott}, year = {1938}}
+@book{gross1964managing,
+  author    = {Gross, Bertram M.},
+  title     = {The Managing of Organizations},
+  publisher = {Free Press of Glencoe}, year = {1964}}
+@book{toffler1970future,
+  author    = {Toffler, Alvin},
+  title     = {Future Shock},
+  publisher = {Random House}, year = {1970}}
+@article{ackoff1967misinformation,
+  author  = {Ackoff, Russell L.},
+  title   = {Management misinformation systems},
+  journal = {Management Science},
+  volume  = {14}, number = {4}, pages = {B147--B156}, year = {1967}}
+@incollection{simon1971designing,
+  author    = {Simon, Herbert A.},
+  title     = {Designing organizations for an information-rich world},
+  booktitle = {Computers, Communications, and the Public Interest},
+  publisher = {Johns Hopkins Press}, pages = {37--72}, year = {1971}}
+@article{gorry1971framework,
+  author  = {Gorry, G. Anthony and {Scott Morton}, Michael S.},
+  title   = {A framework for management information systems},
+  journal = {Sloan Management Review},
+  volume  = {13}, number = {1}, pages = {55--70}, year = {1971}}
+\end{filecontents}
+\end{document}
