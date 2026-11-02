@@ -86,8 +86,8 @@ class Tab:
 
 class Rmeans:
   "Regression: per-x-column bin means of y, m-estimated, weighed by variance."
-  def __init__(i, tbl, rows, y):
-    sub = tbl.clone(rows)
+  def __init__(i, tab, rows, y):
+    sub = tab.clone(rows)
     i.all, i.cols, i.has = Num(), sub.x, {}
     for r in sub.rows: i.all.add(y(r))
     for col in sub.x:
@@ -106,11 +106,11 @@ class Rmeans:
 
 class Nb:
   "Naive Bayes: one sub-table per klass; guess the likeliest (binned data)."
-  def __init__(i, tbl, rows):
-    i.tbl, i.subs, i.n, i.nKlass = tbl, {}, len(rows), 0
+  def __init__(i, tab, rows):
+    i.tab, i.subs, i.n, i.nKlass = tab, {}, len(rows), 0
     for r in rows:
-      v = r[tbl.klass.at]
-      if v not in i.subs: i.subs[v] = tbl.clone(); i.nKlass += 1
+      v = r[tab.klass.at]
+      if v not in i.subs: i.subs[v] = tab.clone(); i.nKlass += 1
       i.subs[v].add(r)
   def like(i, sub, row):
     m = the["m"]
@@ -118,7 +118,7 @@ class Nb:
     for j, col1 in enumerate(sub.x):
       v = row[col1.at]
       if v != "?":
-        L += log((col1.has.get(v, 0) + m) / (col1.n + m * i.tbl.x[j].nVals()))
+        L += log((col1.has.get(v, 0) + m) / (col1.n + m * i.tab.x[j].nVals()))
     return L
   def guess(i, row):
     return max(i.subs, key=lambda k: i.like(i.subs[k], row))

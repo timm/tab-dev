@@ -46,7 +46,7 @@
 
 \abstract[Summary]{On [N] tabular SE data sets, a Naive Bayes
 classifier over seven discretized bins comes within [X]\% of LightGBM
-and TabPFN (by recall and false alarm).  The whole learner is [N]
+and TabICL (by recall and false alarm).  The whole learner is [N]
 lines of Lua with no dependencies; it trains and tests in [T] seconds
 on a laptop.  We describe its design, the experience of keeping it
 small, and the working style it enables: many fast runs, and only an
@@ -66,7 +66,7 @@ look old.
 
 This paper offers a result that will not age so fast.  On [N] tabular
 SE data sets, a Naive Bayes classifier with seven discretized bins
-comes within [X]\% of gradient boosting (GBM, LightGBM) and TabPFN,
+comes within [X]\% of gradient boosting (GBM, LightGBM) and TabICL,
 measured by recall (pd) and false alarms (pf).  The whole learner is
 [N] lines of Lua.  It runs in [T] seconds on a laptop.  A student can
 read it in an afternoon.
@@ -88,7 +88,7 @@ your bug.''  So we practice \emph{seeking minima as a
 methodology}: delete until nothing can hide.  Seeking minima is
 not simple, since a minimum means little until it is benchmarked
 against the maximal alternative -- hence every small learner here
-is scored against LightGBM and TabPFN, so the cost and the benefit
+is scored against LightGBM and TabICL, so the cost and the benefit
 of smallness are both on the table.  The reward is what the minima
 teach: each dramatic simplification found below (one update
 primitive, training inside constructors, learners as two or three
@@ -243,7 +243,7 @@ That suits a research style with two speeds:
 \item Fast: thousands of cheap runs with small learners to explore
   the option space.
 \item Slow: a few runs against an expensive reference (GBM, LightGBM,
-  TabPFN) to confirm what the fast runs found.
+  TabICL) to confirm what the fast runs found.
 \end{itemize}
 
 Most of the time goes into the fast loop.  The slow loop is a check,

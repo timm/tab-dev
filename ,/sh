@@ -12,6 +12,7 @@ export PATH="$Here/,:$PATH"
 [ -d "$TAB" ] || echo "warning: no tab checkout at $TAB" >&2
 exec bash --init-file <(cat <<EOF
 [ -f ~/.bashrc ] && . ~/.bashrc
+PATH="$Here/,:\${PATH//$Here\/,:/}"  # ,/ first, despite bashrc
 cd "$Here"
 . "$Here/etc/prompt.bash" 2>/dev/null
 alias t='luajit \$TAB/tab.lua'
