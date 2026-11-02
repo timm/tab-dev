@@ -36,7 +36,8 @@
   label={lst:#1}]{snips/#1.lua}}
 
 \begin{document}
-\title{tab.lua: a good guess from a few dozen labels}
+\title{Use the model, ship the program:\\
+  neuro-guided synthesis of very fast learners}
 \author[1]{Tim Menzies}
 \authormark{MENZIES}
 \address[1]{\orgdiv{Computer Science}, \orgname{North Carolina State
@@ -58,6 +59,8 @@ languages, reproducibility}
 
 \section{Introduction}
 
+MSR May 19, 2013
+
 Every month brings a bigger model.  Every month, last month's results
 look old.
 
@@ -67,6 +70,40 @@ comes within [X]\% of gradient boosting (GBM, LightGBM) and TabPFN,
 measured by recall (pd) and false alarms (pf).  The whole learner is
 [N] lines of Lua.  It runs in [T] seconds on a laptop.  A student can
 read it in an afternoon.
+
+After two years of intensive work with LLMs, writing papers on
+software analytics, we assert that science-oriented programming is
+different from commercial programming.  Commercial code optimizes
+for delivery: ship the feature, minimize time and cost, and let
+size and opacity hide behind test suites and teams.  Scientific
+code optimizes for something else -- the veracity of a conclusion.
+Here, the program is not a product that supports the argument; the
+program \emph{is} the argument, and every line is a claim that a
+stranger must be able to check.
+
+That difference makes minimality an end in itself, not an
+aesthetic.  A scientific deliverable is judged by how quickly a
+skeptical reader reaches either ``I believe this'' or ``here is
+your bug.''  So we practice \emph{seeking minima as a
+methodology}: delete until nothing can hide.  Seeking minima is
+not simple, since a minimum means little until it is benchmarked
+against the maximal alternative -- hence every small learner here
+is scored against LightGBM and TabPFN, so the cost and the benefit
+of smallness are both on the table.  The reward is what the minima
+teach: each dramatic simplification found below (one update
+primitive, training inside constructors, learners as two or three
+questions asked of shared summaries) was a thing we did not know
+until the surrounding code was gone.
+
+There is also a lesson here about building neuro-symbolic systems.
+This kit was written with an LLM used as a sounding board, a tool
+for exploring options, a research assistant doing the mechanical
+work -- while a small symbolic artifact (a few hundred lines of
+Lua, pinned by golden tests) disciplined every suggestion: any
+change had to reproduce byte-identical output and hold the
+baseline speed, or it died.  Many fast probes, aggressive
+deletion, and an executable referee between the two.  We offer
+that loop as one answer to how to do science in the age of LLMs.
 
 We do not claim that big tools are useless.  We claim that most of
 the time, they are not needed.  Science works best with many fast
@@ -126,14 +163,7 @@ lot.  So the problem has moved from making things to choosing among
 them, and the right response is the old one: find the minimum that
 matters.
 
-\subsection{Locked out of science}
-
-Big models have a second cost: they exclude people.  A result that
-needs a GPU cluster can be checked only by people who have one.  Most
-of the world's scientists, students, and small labs do not.  For
-them, current AI research is something they read about but cannot
-repeat.  When results cannot be repeated by most people, it is hard
-to call them science.
+\subsection{Programming under examination}
 
 Repetition matters because we all make mistakes.  In 2013 we had a
 paper accepted at MSR on cross-company defect prediction.  It beat
@@ -145,6 +175,46 @@ this at the conference.  That error was found because the code was
 small enough to read, and the data was open enough to rerun.  Large,
 opaque, expensive pipelines hide errors like this.  Small, cheap ones
 expose them.
+
+That episode set a working rule we have kept since: offer
+everything.  All the code, all the data, the seeds, the splits, the
+scripts that drew every figure -- so that others can repeat,
+improve, or refute the result at the cost of one download.  This is
+partly service and partly discipline.  Write every line expecting
+that it will be examined, in great detail, by some researcher
+somewhere in the world, and the line comes out different: shorter,
+plainer, with its assumptions on the surface.  Reputation in
+science is not built on being right the first time; it is built on
+being checkable, and on reporting quickly when the check fails.
+
+Big models work against this.  A result that needs a GPU cluster
+can be checked only by people who have one.  Most of the world's
+scientists, students, and small labs do not.  For them, current AI
+research is something they read about but cannot repeat.  When
+results cannot be repeated by most people, it is hard to call them
+science.
+
+\subsection{What the logs say}
+
+The difference can be measured.  This kit was built with an LLM
+assistant, and the assistant's transcripts record every request
+made of it.  Over two months and 868 prompts (this kit, plus four
+sibling research projects), the requests sort as follows: 105
+asked for renames or uniformity (``is \texttt{i} only ever used
+for self?'', ``constructors before methods''); 72 interrogated
+code that already worked (``why do we need \texttt{leaves}?'',
+``surely only \texttt{Num} needs \texttt{w}?''); 61 demanded
+verification (golden tests, byte-identical output, ``same job at
+same speed as the lua we started with''); 57 asked for something
+to be deleted, folded, or shrunk.  Not one asked for faster
+delivery.  (The classifier is \texttt{etc/logmine.py} in this
+paper's repository: thirty lines that read any Claude Code
+transcript directory, so readers can audit our audit -- or their
+own practice.)  A commercial reviewer would read most of that traffic
+as churn.  Here it is the work: the majority of the editing budget
+went to making the artifact smaller, more uniform, and more
+interrogated, under a regime where behavior and speed were frozen
+by tests.  Form is content when the artifact is the argument.
 
 \subsection{The ground keeps moving}
 
@@ -203,8 +273,6 @@ Distance to heaven labels a row; bins collect those labels; a guess
 is the variance-weighted, shrunken mean of the bins a row falls into.
 
 \snip{TAB.ydist}
-\snip{Bins}
-\snip{BINS.weight}
 \snip{Rmeans}
 \snip{RMEANS.guess}
 

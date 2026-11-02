@@ -1,4 +1,4 @@
-function lab.all(    tr,te,y,i,lo,m1,m2,d,err,n) --> nil
+function slow.all(    tr,te,y,i,lo,m1,m2,d,err,n) --> nil
   tr, te, y = halves()
   i  = Tree(tr, tr.rows, y)
   assert(i.n == #tr.rows, "root holds every training row")
