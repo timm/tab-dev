@@ -71,6 +71,60 @@ What survived: binning test rows on **training** statistics (+2.5), and
 The ceiling: naive Bayes ~80.1 mean accuracy, LightGBM 82.8, TabICL
 86.6. A real gain means beating the booster, not tuning the Bayes.
 
+**The tree was starved, not weak** (Nov 3). `tab` ships `depth=4
+leaf=8`, so a tree holds at most 8 leaves: it cannot name audiology's
+24 klasses, and on a 14-row set `2*leaf` exceeds the data so nothing
+splits at all. Every set we lost worst on was a many-klass or
+conjunctive one (audiology -19, anneal -12, tic-tac-toe -11, letter
+-10, vowel -10 against LightGBM). `etc/knobs.py` sweeps the knobs and
+writes nothing to `cache/`; it puts the plateau at **depth=12 leaf=2**,
+worth +13 on those sets. Column subsampling at `cols=3` costs ~5
+points; all-columns and `sqrt(#x)` tie, so bag members use `sqrt`.
+
+| arm | acc | pd | pf | d2h | auc |
+|---|---|---|---|---|---|
+| nb72 | 79.4 | 72.4 | 14.1 | 0.255 | 0.846 |
+| treedeep (one deep tree) | 79.2 | | | | |
+| boostdeep | 82.5 | | | | |
+| bagbodeep | 83.4 | | | | |
+| **fordeep** (30 deep trees, sqrt cols) | **83.6** | 75.5 | 13.6 | 0.243 | 0.863 |
+| **either** (fordeep or nb, picked on train) | **83.8** | 76.5 | 13.0 | 0.229 | 0.862 |
+| lgbm | 82.8 | 76.6 | 13.7 | 0.231 | 0.848 |
+| tabicl | 86.6 | 81.5 | 11.4 | 0.188 | 0.885 |
+
+Read that carefully. On **accuracy** and **auc** the deep forest is
+ahead of LightGBM, but all three tests call it `same` -- parity, not a
+win, and parity is already the first time tab has reached the booster.
+On **d2h** LightGBM still wins more sets (43 of 69 against `fordeep`),
+so the macro picture is a tie at best. TabICL is untouched.
+
+`Either` is the useful idea, not the bigger number: NB and a deep
+forest own *different* sets (NB heart.c 87.4 vs a deep tree's 74.3;
+the forest letter 82.2 vs NB's 70.2), so it holds out a quarter of
+TRAIN, scores both, and refits the winner on all of train. No test row
+is touched. It is +1.8 on NB over all 73 sets.
+
+Cost, mean seconds to fit one 80% split over the same 69 sets: nb72
+0.011, fordeep 7.24 (median 0.39), lgbm 6.80 (median 2.50). So the
+forest is ~6x faster than LightGBM in the median and much worse in the
+tail (max 212s on letter against LightGBM's 53s) -- the cut search is
+O(rows x cols x bins) and nothing prunes it. Measured under parallel
+load, so treat it as a shape, not a number.
+
+Forest size pays, slowly: on the same slices, bag=10/30/60/100 scores
+weak 86.4/88.0/88.6/88.7 and auc .885/.897/.904/.908. Past 30 trees
+you buy a tenth of a point per doubling, and auc a little more.
+
+Still open: boosting adds nothing over the plain deep forest
+(`boostdeep` 82.5, `bagbodeep` 83.4, both under `fordeep` 83.6), which
+is suspicious -- SAMME over deep trees may need a learning rate.
+
+Defects found in the rigs while measuring this (all fixed): `rank.py`
+used a flat 0.5 tie band, so on auc's 0-1 scale every set was a tie;
+`rank.py` and `sig.py` counted a *bigger* pf or d2h as a win; and in
+`charts.py` the `arms` figure shadowed the `arms` helper, so `clas`
+could not be drawn at all (helper is now `ranarms`).
+
 ## Open and unresolved
 
 **AODE.** `docs/rq.md` reports AODE as the better classifier (82.8 vs

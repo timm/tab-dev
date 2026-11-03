@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # run: the learners, every relevant moot csv, in parallel.
 # usage: ./run nb|rmeans|rmeansall|lgbm|tabicl|tabpfn|results
-#               |figures|fresh [P]
+#               |figures|fresh [P]   or: ./run ens <ens.py arm> [P]
+# Everything runs under `caffeinate -i`, and the two monster classify
+# sets are skipped by default (SKIP= to keep them).
 # Scores land in $CACHE; tab-eg.lua and lgbm.py skip any file
 # already written (force=y to insist), so re-runs are cheap.
 #
@@ -23,6 +25,20 @@ P=${2:-8}
 export TAB MOOT CACHE
 # charts.py and lgbm.py read $CACHE; tab-eg.lua still hardcodes
 # ~/tmp/cache, so the lua arms write there whatever this says.
+# An idle sleep in the middle of a three-hour arm loses the lot, so
+# the whole queue runs under one caffeinate assertion -- re-exec'd
+# once, not per worker, and released when this script exits.  -i is
+# idle sleep only: the display still sleeps, and on battery macOS
+# ignores a system-sleep assertion anyway.
+if [ -z "$Caffeinated" ] && command -v caffeinate >/dev/null 2>&1; then
+  Caffeinated=1 exec caffeinate -i "$Self" "$@"
+fi
+
+# Two classify sets are ~85% of a tree arm's whole runtime (COMPAS53
+# 71 min, mnist_1 67 min, against 22 min for the other 71 together),
+# and neither splits across cores.  SKIP= to keep them.
+Skip=${SKIP-'COMPAS53|mnist_1'}
+
 [ -d "$TAB" ] || { echo "no tab checkout at ${TAB:-../tab}" >&2; exit 1; }
 EG="$TAB/tab-eg.lua"
 # -S 8192: BSD xargs assembles at most 255 bytes per -I line, and
@@ -60,6 +76,12 @@ case "${1:-help}" in
              printf '%s\n' "$MOOT"/optimize/*/*.csv \
                 "$MOOT"/classify/*.csv "$MOOT"/regression/*.csv \
              | OMP_NUM_THREADS=2 gonn "$NN" etc/nn.py "$1" {} ;;
+
+  # ens.py's own arms (see its Arms table): run ens <arm> [P].
+  ens)       A="${2:?usage: run ens <arm> [P]}"; P="${3:-8}"
+             ls "$MOOT"/classify/*.csv \
+             | { [ -n "$Skip" ] && grep -vE "$Skip" || cat; } \
+             | go python3 etc/ens.py "$A" {} ;;
 
   results)   for x in nb rmeans rmeansall lgbm; do "$0" "$x" "$P"; done ;;
 

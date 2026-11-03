@@ -31,7 +31,21 @@ Look = {
   "tabicl":    ("#860c4f", "-",  "s", "TabICLv2"),
   "tabpfn":    ("#e7298a", "--", "^", "TabPFN-3"),
   "treemaj":   ("#d9661f", "-",  "o", "tree, majority at the leaf"),
-  "treenb":    ("#6a3d9a", "-",  "s", "tree, naive Bayes at the leaf")}
+  "treenb":    ("#6a3d9a", "-",  "s", "tree, naive Bayes at the leaf"),
+  "treeraw":   ("#b2df8a", ":",  "o", "tree, raw columns"),
+  "forraw":    ("#7fbf7b", "--", "v", "bagged trees, raw columns"),
+  "bagboraw":  ("#4a9c6d", "-.", "D", "boosted bags, raw columns"),
+  "boostraw":  ("#1b7837", "-",  "^", "boosted trees, raw columns"),
+  "treedeep":  ("#b2df8a", ":",  "o", "tree, deep (depth=12 leaf=2)"),
+  "fordeep":   ("#7fbf7b", "-",  "v", "forest of 30 deep trees"),
+  "for60":     ("#1b7837", "-",  "v", "forest of 60 deep trees"),
+  "either60":  ("#122b0f", "-",  "*", "60-tree forest or naive Bayes, "
+                                      "chosen on train"),
+  "boostdeep": ("#7fbf7b", "--", "^", "boosted deep trees"),
+  "bagbodeep": ("#4a9c6d", "-.", "D", "boosted bags of deep trees"),
+  "either":    ("#122b0f", "-",  "*", "deep forest or naive Bayes, "
+                                      "chosen on train"),
+  "hardeep":   ("#1f5f9e", "--", "s", "forest of 30, hard vote")}
 
 def cells(dir, who, col):
   "Column COL of DIR's WHO.csv, one number per rep."
@@ -123,8 +137,12 @@ def mark(ax, names, which=None):
       t.set_color("#c0392b")
       t.set_fontweight("bold")
 
-def arms(need, extra=("tabicl", "tabpfn")):
-  "NEED, plus whichever foundation models have actually run."
+def ranarms(need, extra=("tabicl", "tabpfn")):
+  """NEED, plus whichever foundation models have actually run.
+
+  Not `arms`: that name belongs to the figure below, and a figure
+  defined later silently shadowed this helper, so `clas` could not be
+  drawn at all."""
   return list(need) + [w for w in extra
                        if glob.glob(f"{Cache}/*/*/{w}.csv")
                        or glob.glob(f"{Cache}/*/{w}.csv")]
@@ -132,7 +150,7 @@ def arms(need, extra=("tabicl", "tabpfn")):
 # ---- the four figures ------------------------------------------------
 def clas():
   "pd, pf and d2h on moot/classify: one vote per klass, no weights."
-  who  = arms(["nb72", "lgbm"], ("tabicl", "tabpfn"))
+  who  = ranarms(["nb72", "fordeep", "lgbm"], ("tabicl", "tabpfn"))
   S    = sets("classify", ["nb72", "lgbm"])
   cols = [("pd", "pd %  (higher better)"), ("pf", "pf %  (lower better)"),
           ("d2h", "d2h  (lower better)")]
@@ -234,7 +252,7 @@ def gain():
 
 def labels(kind="regression", name="labels", vs="lgbm"):
   "Raw MAE on moot/regression: 45 labels against everyone's all."
-  who = arms(["rmeans", "rmeansall", "lgbm"])
+  who = ranarms(["rmeans", "rmeansall", "lgbm"])
   S   = sets(kind, ["rmeans", "rmeansall", "lgbm"])
   med = {w: {n: st.median(cells(d, w, "mae") or [float("nan")])
              for n, d in S} for w in who}
@@ -279,7 +297,7 @@ def labels(kind="regression", name="labels", vs="lgbm"):
 
 def top5(kind="regression", name="top5"):
   "Label only each arm's top 5: how good is the best of those?"
-  who = arms(["rmeans", "rmeansall", "lgbm"])
+  who = ranarms(["rmeans", "rmeansall", "lgbm"])
   S   = sets(kind, ["rmeans", "rmeansall"])
   med = {w: {n: (lambda v: st.median(v) if v else float("nan"))(
                  cells(d, w, "rank")) for n, d in S} for w in who}
@@ -316,7 +334,7 @@ def rate(v):
 def secs():
   "How many of this arm's runs fit inside one LightGBM run."
   mine = {"classify": "nb72", "regression": "rmeans"}
-  who  = arms([], ("tabicl", "tabpfn")) + ["tab"]
+  who  = ranarms([], ("tabicl", "tabpfn")) + ["tab"]
   cur  = {w: [] for w in who}
   n    = 0
   for kind, ours in mine.items():
@@ -356,7 +374,7 @@ def raw():
   "Absolute seconds per run, each task on its own panel."
   mine = (("classify", "nb72"), ("regression", "rmeans"),
           ("optimize", "rmeans"))
-  who  = arms(["lgbm"], ("tabicl", "tabpfn")) + ["tab"]
+  who  = ranarms(["lgbm"], ("tabicl", "tabpfn")) + ["tab"]
   Look["tab"] = ("#1f5f9e", "-", "o",
                "tab nb+rmeans (bins=7,m=2)")
   f, ax = plt.subplots(1, 3, figsize=(18, 5.8), dpi=200, sharey=True)
@@ -394,7 +412,7 @@ def raw():
 def cost():
   "Seconds against training rows: how each arm grows with the data."
   mine = {"classify": "nb72", "regression": "rmeans"}
-  who  = arms(["lgbm"], ("tabicl", "tabpfn")) + ["tab"]
+  who  = ranarms(["lgbm"], ("tabicl", "tabpfn")) + ["tab"]
   Look["tab"] = ("#1f5f9e", "-", "o",
                "tab nb+rmeans (bins=7,m=2)")
   pts  = {w: [] for w in who}
@@ -461,16 +479,26 @@ def auc():
   over nothing -- or when both arms sit below chance, having no
   ordering to rank.  Set AUCALL=1 to keep 3-5 klasses only.
   """
-  who = tuple(["nbauc", "lgbmauc"]
-              + [w for w in ("tabiclauc", "tabpfnauc")
+  # tab's own arm leads, not the naive Bayes.  Three arms only: the
+  # forest, the booster it set out to match, and the model neither
+  # reaches.  Grey asks one question -- is the forest TabICL yet?
+  who = tuple(["hardeepauc", "lgbmauc"]
+              + [w for w in ("tabiclauc", "tabpfnauc",
+                             "treedeepauc", "nbauc")
                  if glob.glob(f"{Cache}/classify/*/{w}.csv")])
-  S   = sets("classify", ["nbauc", "lgbmauc"])
+  Pair = ("hardeepauc", "tabiclauc")   # what the sort and sd strip use
+  S   = sets("classify", ["hardeepauc", "lgbmauc"])
   if os.getenv("AUC35"): S = [(n,d) for n,d in S if 3 <= klasses(n) <= 5]
+  # A 20% test split under this many rows cannot carry an auc: one
+  # row moving swings it by a tenth.  Computed, not listed by name,
+  # so the exclusion is reproducible and means one definite thing.
+  Mintest = 10
   keep, gone = [], []
   for n, d in S:
     ks = [k for w in who if (k := cells(d, w, "klasses"))]
     au = [st.fmean(a) for w in who if (a := aucs(d, w))]
-    if min(min(k) for k in ks) > 0 and max(au) >= .5: keep.append((n, d))
+    if (min(min(k) for k in ks) > 0 and max(au) >= .5
+        and int(.2 * rows(n, "classify")) >= Mintest): keep.append((n, d))
     else: gone.append(n)
   print(f"  auc: kept {len(keep)} of {len(S)}; dropped {' '.join(gone)}")
   raw = {w: {n: v for n, d in keep if (v := aucs(d, w))}
@@ -479,10 +507,12 @@ def auc():
   has = lambda w, n: n in med[w]          # an arm that declined this set
   grp = {n: (0 if klasses(n) == 2 else 1 if klasses(n) <= 5 else 2)
          for n, _ in keep}
+  # Inside each band, by how far the hard-vote forest sits from
+  # TabICL: the left of a band is where it loses worst, the right
+  # where it has caught up.  One question, read left to right.
   keep.sort(key=lambda nd: (grp[nd[0]],
-                            med[who[0]][nd[0]]
-                            - max(med[w][nd[0]] for w in who[1:]
-                                  if has(w, nd[0]))))
+                            med[Pair[0]][nd[0]] - med[Pair[1]][nd[0]]
+                            if all(has(w, nd[0]) for w in Pair) else 9))
   names = [n for n, _ in keep]
   edge  = [j for j in range(1, len(names))         # where a group ends
            if grp[names[j]] != grp[names[j - 1]]]
@@ -490,15 +520,18 @@ def auc():
     "The lowest and highest scoring arms that ran on set N."
     ws = sorted((w for w in who if has(w, n)), key=lambda w: med[w][n])
     return raw[ws[0]][n], raw[ws[-1]][n]
-  tie   = {n: same(*ends(n)) for n in names}
-  # The pooled sd of the two arms' 20 reps: the denominator cohen's d
+  def pair(n):
+    "The two arms sorted on, or None when one of them sat this out."
+    return (None if not all(has(w, n) for w in Pair)
+            else (raw[Pair[0]][n], raw[Pair[1]][n]))
+  # The pooled sd of those two arms' 20 reps: the denominator cohen's d
   # divides by, and so the scale that says whether a gap above is real.
   def pooled(n,    a=None, b=None):
-    a, b = ends(n)
+    a, b = pair(n) or ends(n)
     return (((len(a)-1)*st.pstdev(a)**2 + (len(b)-1)*st.pstdev(b)**2)
             / (len(a)+len(b)-2)) ** .5
-  for w in who: Look[w] = Look[w[:-3]]   # nbauc draws as nb72 does
-  Look["nbauc"] = Look["nb72"]
+  for w in who: Look[w] = Look[w[:-3]]   # eitherauc draws as either
+  Look["nbauc"] = Look["nb72"]           # ,/run writes nb at bins=7
   # A thin strip of its own, not a second scale on the first: sd and
   # auc do not share units, and one axis per panel is the rule.
   f, (ax, sx) = plt.subplots(2, 1, figsize=(13, 7), dpi=200, sharex=True,
@@ -508,13 +541,10 @@ def auc():
     a.spines[["top", "right"]].set_visible(False)
     a.grid(axis="y", color="#eeeeee", zorder=0)
   for a in (ax, sx):
-    for j, n in enumerate(names):     # the two arms are one sample here
-      if tie[n]: a.axvspan(j - .5, j + .5, color="#ececec", lw=0, zorder=0)
     for j in edge: a.axvline(j - .5, color="#999999", lw=1, zorder=2)
-  # auc floors at .5, not 0: below that line is what a coin would score.
-  ax.axhline(.5, color="#999999", ls=":", lw=1, zorder=2)
-  ax.text(len(names) - .5, .5, " chance", ha="left", va="center",
-          fontsize=9, color="#666666")
+  # The full range, so a gap is read against the whole scale and not
+  # against a window chosen to flatter it.
+  Floor = 0
   for w in who:
     col, ls, mk, lab = Look[w]
     ax.plot(range(len(names)),
@@ -522,15 +552,20 @@ def auc():
             ls, color=col,
             marker=mk or "o", ms=4, lw=1.4,
             label=lab, zorder=3)
-  ax.set_ylim(0, 1)
+  ax.set_ylim(Floor, 1)
+  low = sorted((med[w][n], Look[w][3], n) for w in who for n in names
+               if has(w, n) and med[w][n] < Floor)
+  note = ""
+  if low:
+    note = ("\nthe axis starts at {:g}; below it, off scale:  "
+            .format(Floor)
+            + ";  ".join(f"{lab} {n} {v:.2f}" for v, lab, n in low))
   for lo, hi, lab in zip([0] + edge, edge + [len(names)],
                          ("2 klasses", "3-5 klasses", "6+ klasses")):
     if hi > lo:
       ax.text((lo + hi - 1) / 2, .02, f"{lab}  (n={hi - lo})",
               transform=ax.get_xaxis_transform(), ha="center", va="bottom",
               fontsize=9, color="#555555")
-  ax.plot([], [], lw=8, color="#ececec",
-          label="grey: one sample (cohen, cliffs and ks all agree)")
   ax.legend(frameon=False, fontsize=10, ncol=len(who) + 1,
             loc="lower center", bbox_to_anchor=(.5, 1.07))
   wins = sum(1 for n in names
@@ -540,8 +575,8 @@ def auc():
               [med[w][n] for n in names if has(w, n)]),
               "" if len(med[w]) == len(names)
                  else f" (on {len(med[w])})") for w in who)
-          + "      least==most on {} of {};   naive Bayes best on {}".format(
-              sum(tie.values()), len(names), wins),
+          + "      {} best on {} of {}".format(
+              Look[who[0]][3], wins, len(names)),
           transform=ax.transAxes, ha="left", va="bottom", fontsize=10.5,
           color="#333333")
   sds = [pooled(n) for n in names]
@@ -550,7 +585,7 @@ def auc():
   sx.set_ylim(0, max(sds) * 1.15)
   sx.set_ylabel("pooled sd", fontsize=9)
   sx.tick_params(axis="y", labelsize=8)
-  sx.text(0, 1.04, "pooled sd of the least and most arms:  median {:.3f}"
+  sx.text(0, 1.04, "pooled sd of the hard-vote forest and TabICL:  median {:.3f}"
                    "   max {:.3f} ({})".format(
             st.median(sds), max(sds), names[sds.index(max(sds))]),
           transform=sx.transAxes, ha="left", va="bottom", fontsize=9,
@@ -560,10 +595,10 @@ def auc():
   sx.set_xticklabels(names)
   sx.tick_params(axis="x", labelsize=6.5, rotation=90)
   sx.set_xlabel(f"{len(names)} moot/classify sets,"
-                " sorted by the auc gap inside each group",
+                " sorted by the gap to TabICL inside each group" + note,
                 fontsize=11, labelpad=12)
   # pad clears the legend, which sits above the axes, not inside it.
-  ax.set_title("TabICL leads; naive Bayes and LightGBM split the rest\n"
+  ax.set_title("TabICL leads; tab's deep forest now matches LightGBM\n"
                "(each point is one set's mean over 20 random 80:20"
                " splits)", fontsize=13, pad=74)
   f.savefig(f"{Docs}/auc.png", bbox_inches="tight"); plt.close(f)
