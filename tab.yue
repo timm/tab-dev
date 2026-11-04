@@ -302,9 +302,42 @@ NB.like = (sub, row) =>           -- num; log P(`row` | `sub:TAB`)
   prior = log((#sub.rows + the.m) / (@n + the.m * @nKlass))  -- m/klass
   prior + sum(sub.x, fn)
 
+-- `pairs` has no order, so a klass tie used to fall whichever way
+-- the hash happened to lie.  Sort the keys once and every tie after
+-- goes to the same klass in lua, yue and python alike.
+NB.klasses = =>                   -- list; `@subs`'s keys, sorted
+  ks = {}
+  for k in pairs @subs
+    ks[#ks + 1] = k
+  sort ks, (a, b) -> tostring(a) < tostring(b)
+
 NB.guess = (row) =>               -- value; `row`'s likeliest klass
-  k = best(@subs, (sub) -> @like(sub, row))
-  k
+  local b, bk, v
+  b = -math.huge
+  for _, k in order @klasses!
+    v = @like(@subs[k], row)
+    b, bk = v, k if v > b         -- strict `>`: the first one wins
+  bk
+
+-- p(klass | `row`), so an ensemble can average how sure it is -- and
+-- so an auc has a score to rank by.  `like` returns a LOG likelihood,
+-- so the top one comes off before `exp`, which would otherwise
+-- underflow to zero for every klass at once.
+NB.posts = (row) =>               -- dict; p(klass | `row`)
+  local hi, z
+  ks, t = @klasses!, {}
+  hi = -math.huge
+  for _, k in order ks
+    t[k] = @like(@subs[k], row)
+    hi = max hi, t[k]
+  z = 0
+  for _, k in order ks
+    t[k] = exp(t[k] - hi)
+    z += t[k]
+  u = {}
+  for _, k in order ks
+    u[k] = t[k] / z
+  u
 
 -- ---- tree -----------------------------------------------------------
 -- One node over `rows`, summarized, then grown.  `cols` is how many

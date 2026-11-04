@@ -776,9 +776,92 @@ def arms():
          "How far behind is a naive Bayes?",
          "(each point is one set's mean over 20 random 80:20 splits)")
 
+
+def pdpf():
+  """pd and pf at one threshold, the two panels in the SAME order.
+
+  auc scores the whole ordering, and on an easy or a lopsided klass
+  it sits near 1 while the arm still misses most of the positives --
+  so an auc chart alone cannot tell "ranks well" from "the klass was
+  easy".  pd and pf are that same answer read at the threshold the
+  learner actually commits to.  Both panels carry one x order, set
+  by pd, so a set that costs pd to buy pf is read straight down the
+  column instead of hunted for twice.
+
+  Five arms, three families: one model (naive Bayes, one deep tree),
+  many models (LightGBM, a 30-tree forest), and a neural one
+  (TabICLv2).  Complete cases only -- every arm ran on every set
+  shown, so the means below compare on one corpus.
+  """
+  fam = [("nb",       "one model"),
+         ("treedeep", "one model"),
+         ("lgbm",     "many models"),
+         ("hardeep",  "many models"),
+         ("tabicl",   "neural")]
+  who = [w for w, _ in fam if glob.glob(f"{Cache}/classify/*/{w}.csv")]
+  S   = sets("classify", who)
+  cols = [("pd", "pd %   (higher better)"), ("pf", "pf %   (lower better)")]
+  med = {(w, c): {n: st.fmean(v) for n, d in S if (v := cells(d, w, c))}
+         for w in who for c, _ in cols}
+  keep = [(n, d) for n, d in S
+          if all(n in med[(w, c)] for w in who for c, _ in cols)]
+  print(f"  pdpf: kept {len(keep)} of {len(S)}")
+  grp = {n: (0 if klasses(n) == 2 else 1 if klasses(n) <= 5 else 2)
+         for n, _ in keep}
+  # Sorted on the MEAN pd of the arms shown, not on one arm's pd: a
+  # key taken from a single arm draws that arm as a smooth curve and
+  # every rival as noise around it, which is a property of the sort,
+  # not a result.
+  avgpd = {n: st.fmean([med[(w, "pd")][n] for w in who]) for n, _ in keep}
+  keep.sort(key=lambda nd: (grp[nd[0]], avgpd[nd[0]]))
+  names = [n for n, _ in keep]
+  edge  = [j for j in range(1, len(names))
+           if grp[names[j]] != grp[names[j - 1]]]
+  lab = dict(Look)
+  lab["nb"] = Look["nb72"]              # ,/run writes nb at bins=7
+  f, ax = plt.subplots(2, 1, figsize=(13, 8), dpi=200, sharex=True,
+                       gridspec_kw=dict(hspace=.10))
+  for k, (c, ylab) in enumerate(cols):
+    a = ax[k]
+    a.spines[["top", "right"]].set_visible(False)
+    a.grid(axis="y", color="#eeeeee", zorder=0)
+    for j in edge: a.axvline(j - .5, color="#999999", lw=1, zorder=2)
+    for w in who:
+      col, ls, mk, _ = lab[w]
+      a.plot(range(len(names)), [med[(w, c)][n] for n in names], ls,
+             color=col, marker=mk, ms=3.5, lw=1.5,
+             label="{}  [{}]".format(lab[w][3],
+                                     dict(fam)[w]), zorder=3)
+    a.set_ylim(0, 100)
+    a.set_ylabel(ylab, fontsize=11)
+    a.text(0, 1.012, "mean over sets:   " + "      ".join(
+             "{} {:.1f}".format(lab[w][3], st.fmean(
+               [med[(w, c)][n] for n in names])) for w in who),
+           transform=a.transAxes, ha="left", va="bottom",
+           fontsize=10.5, color="#333333")
+  for lo, hi, t in zip([0] + edge, edge + [len(names)],
+                       ("2 klasses", "3-5 klasses", "6+ klasses")):
+    if hi > lo:
+      ax[0].text((lo + hi - 1) / 2, .02, f"{t}  (n={hi - lo})",
+                 transform=ax[0].get_xaxis_transform(), ha="center",
+                 va="bottom", fontsize=9, color="#555555")
+  ax[0].legend(frameon=False, fontsize=10, ncol=3,
+               loc="lower center", bbox_to_anchor=(.5, 1.10))
+  ax[1].set_xticks(range(len(names)))
+  ax[1].set_xticklabels(names)
+  ax[1].tick_params(axis="x", labelsize=6.5, rotation=90)
+  ax[1].set_xlabel(f"{len(names)} moot/classify sets, both panels in one"
+                   " order: by mean pd inside each klass group",
+                   fontsize=11, labelpad=12)
+  ax[0].set_title("pd and pf at the threshold, where auc will not say\n"
+                  "(each point is one set's mean over 20 random 80:20"
+                  " splits)", fontsize=13, pad=58)
+  f.savefig(f"{Docs}/pdpf.png", bbox_inches="tight"); plt.close(f)
+  print(f"{Docs}/pdpf.png")
+
 if __name__ == "__main__":
   extra = {"optlabels": lambda: labels("optimize", "optlabels", vs="tabicl"),
            "opt":       lambda: top5("optimize", "opt")}
   jobs = sys.argv[1:] or ["clas", "labels", "top5", "optlabels", "opt",
-                          "secs", "cost", "raw", "auc", "tree", "arms"]
+                          "secs", "cost", "raw", "auc", "pdpf", "tree", "arms"]
   for j in jobs: (extra.get(j) or globals()[j])()
