@@ -114,7 +114,7 @@ function treeBoth(tr,te,    i,col,bag,post,n,t,sum,k,a,was) --> str,str
   col, bag, post = tr.klass, Bag(), {}
   for _, row in order(te.rows) do
     post[row] = i:posts(row)
-    bag:tally(row[col.at], i:pick(row).mu) end
+    bag:tally(row[col.at], i:pick(row).mid) end
   sum, k = 0, 0
   for x in pairs(col.has) do
     t = {}

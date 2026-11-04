@@ -352,7 +352,7 @@ Tree = (tbl, rows, y, Y, lvl, cols) ->
   node\sum!\grow!
 
 -- What this node answers with: `@ys` (one y per row), `@all` (those
--- ys, summarized), `@mu` (their mean, or their majority) and `@row`
+-- ys, summarized), `@mid` (their mean, or their majority) and `@row`
 -- (the best row -- only when the ys are numbers, since a klass has no
 -- best).
 -- `mk` and `fy` are not decoration.  `@Y` and `@y` hold plain
@@ -370,7 +370,7 @@ TREE.sum = =>
     @all\add v
     pay(v, row) if pay
   @row = pay and pay!
-  @mu = @all.mu or @all\mid!      -- a mean, or a majority
+  @mid = @all.mu or @all\mid!     -- a mean, or a majority
   @
 
 -- `@`, with two kids under it when a cut pays: deep enough to bother,
@@ -433,22 +433,22 @@ TREE.show = (): nil =>            -- print `@`, one line per node
   t, ends = {}, {}
   for n in @walk!
     t[#t + 1] = n unless n.at
-  sort t, "mu"
+  sort t, "mid"
   ends[t[#t]] = " \226\156\151 "  -- cross the worst leaf,
   ends[t[1]] = " \226\156\147 "   -- tick the best one
-  print(("%-26s %5s %6s   %s")\format("", "n", "mu",
+  print(("%-26s %5s %6s   %s")\format("", "n", "mid",
         @ycols((col) -> col.txt)))
   for n in @walk!
     print(("%-26s %5d %6s%s%s")\format(
           ("|  ")\rep(max(0, n.lvl - 2)) .. n.txt,   -- root gets no bar
-          n.n, o(n.mu), ends[n] or "   ", n\ycols(cell)))
+          n.n, o(n.mid), ends[n] or "   ", n\ycols(cell)))
   print ""
 
--- Return `@` as nested tables: this node's n, mu, split and y-column
+-- Return `@` as nested tables: this node's n, mid, split and y-column
 -- centers, then its two kids under `left` and `right`.  So `logfmt`
 -- prints the whole tree as a record a later run can be diffed against.
 TREE.dict = =>                    -- dict
-  t, node = {n: @n, mu: @mu}, @sub!
+  t, node = {n: @n, mid: @mid}, @sub!
   t.txt = @txt if @txt != ""
   for _, col in order node.y
     t[col.txt] = col.it == NUM and col.mu or best(col.has, same)
@@ -489,7 +489,7 @@ Forest = (tbl, rows, rounds) ->
 FOREST.votes = (row) =>           -- dict,list; tally, in order
   t, ks = {}, {}
   for _, m in order @all
-    k = m\pick(row).mu
+    k = m\pick(row).mid
     if k != nil
       ks[#ks + 1] = k if t[k] == nil
       t[k] = (t[k] or 0) + 1
@@ -839,8 +839,8 @@ slow.all = (): nil ->
     assert i\pick(row).row, "a row reached no payload"
   err = (fn) ->                  -- mean error of a guess
     adds(te.rows, Num!, ((row) -> abs(y(row) - fn(row)))).mu
-  m1 = err((row) -> i\pick(row).mu)
-  m2 = err(-> i.mu)
+  m1 = err((row) -> i\pick(row).mid)
+  m2 = err(-> i.mid)
   print "tree", m1, "grand mean", m2, "depth", d
   assert m1 < m2, "tree lost to the grand mean"
   pay = argmin!                  -- what every cut runs on
