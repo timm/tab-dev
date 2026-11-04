@@ -188,9 +188,13 @@ def clas():
       a.plot(range(len(names)), ys, ls, color=col, marker=mk, ms=3, lw=1.6,
              label=lab, zorder=3)
     a.set_ylabel(ylab, fontsize=10)
+    # An arm with nothing on THIS panel's sets is named, not averaged:
+    # a corpus can grow faster than a slow arm can be run over it, and
+    # a missing arm must not take the whole figure down.
     a.text(0, 1.015, "mean over sets:   " + "      ".join(
-             "{} {:.3g} \u00b1 {:.2g}".format(Look[w][3], st.fmean(v),
-               st.pstdev(v)) for w, v in
+             ("{} {:.3g} \u00b1 {:.2g}".format(Look[w][3], st.fmean(v),
+               st.pstdev(v)) if v else "{} n/a".format(Look[w][3]))
+             for w, v in
              ((w, [y for y in [med[(w, c)][n] for n in names] if y == y])
               for w in who)),
            transform=a.transAxes, ha="left", va="bottom", fontsize=10.5,
@@ -372,11 +376,17 @@ def secs():
 
 def raw():
   "Absolute seconds per run, each task on its own panel."
-  mine = (("classify", "nb72"), ("regression", "rmeans"),
+  # One tab arm per panel: the forest where there are klasses to
+  # vote on, rmeans where there are not.  `nb72` used to stand here,
+  # but it was only ever run on the pre-CC18 sets, so the panel was
+  # costing the corpus a third of itself to name an arm this figure
+  # does not otherwise discuss.
+  mine = (("classify", "hardeep"), ("regression", "rmeans"),
           ("optimize", "rmeans"))
+  Lab  = {"hardeep": "tab forest of 30, hard vote",
+          "rmeans":  "tab.rmeans (bins=7,m=2)"}
   who  = ranarms(["lgbm"], ("tabicl", "tabpfn")) + ["tab"]
-  Look["tab"] = ("#1f5f9e", "-", "o",
-               "tab nb+rmeans (bins=7,m=2)")
+  Look["tab"] = ("#1f5f9e", "-", "o", "tab")
   f, ax = plt.subplots(1, 3, figsize=(18, 5.8), dpi=200, sharey=True)
   for k, (kind, ours) in enumerate(mine):
     a, cur = ax[k], {w: [] for w in who}
@@ -391,9 +401,12 @@ def raw():
       xs = sorted(cur[w])
       if not xs: continue
       c, _, _, lab = Look[w]
-      if w == "tab": lab = f"tab.{ours} (bins=7,m=2)"   # per panel
+      if w == "tab": lab = Lab[ours]                    # per panel
+      # Name each curve's own n beside its total.  A slow arm runs on
+      # fewer sets, so the smaller total can be the dearer learner:
+      # the totals are three corpora, not three columns.
       a.plot(range(1, len(xs) + 1), xs, "-", color=c, lw=2.2, zorder=3,
-             label=f"{lab}   total {sum(xs):,.0f}s")
+             label=f"{lab}   {len(xs)} sets, total {sum(xs):,.0f}s")
     a.set_yscale("log")
     for y, t in ((1, "1 second"), (60, "1 minute")):
       a.axhline(y, color="#cccccc", lw=1, zorder=1)
@@ -487,7 +500,11 @@ def auc():
                              "treedeepauc", "nbauc")
                  if glob.glob(f"{Cache}/classify/*/{w}.csv")])
   Pair = ("hardeepauc", "tabiclauc")   # what the sort and sd strip use
-  S   = sets("classify", ["hardeepauc", "lgbmauc"])
+  # Complete cases only: every arm drawn had to run on every set
+  # shown.  A mean over 106 sets beside a mean over 87 is two
+  # different questions printed as one row, and the sort key -- the
+  # gap to TabICL -- has no value at all on a set TabICL skipped.
+  S   = sets("classify", list(who))
   if os.getenv("AUC35"): S = [(n,d) for n,d in S if 3 <= klasses(n) <= 5]
   # A 20% test split under this many rows cannot carry an auc: one
   # row moving swings it by a tenth.  Computed, not listed by name,
@@ -570,11 +587,15 @@ def auc():
             loc="lower center", bbox_to_anchor=(.5, 1.07))
   wins = sum(1 for n in names
              if med[who[0]][n] >= max(med[w][n] for w in who if has(w, n)))
-  ax.text(0, 1.015, "mean over sets:   " + "      ".join(
-            "{} {:.3g}{}".format(Look[w][3], st.fmean(
-              [med[w][n] for n in names if has(w, n)]),
-              "" if len(med[w]) == len(names)
-                 else f" (on {len(med[w])})") for w in who)
+  # An arm can be missing from every set shown -- a corpus grows
+  # faster than a slow arm can be run over it -- so name it and move
+  # on rather than take the figure down.
+  def avg(w,    v=None):
+    v = [med[w][n] for n in names if has(w, n)]
+    return ("{} {:.3g}{}".format(Look[w][3], st.fmean(v),
+              "" if len(v) == len(names) else f" (on {len(v)})")
+            if v else "{} n/a".format(Look[w][3]))
+  ax.text(0, 1.015, "mean over sets:   " + "      ".join(avg(w) for w in who)
           + "      {} best on {} of {}".format(
               Look[who[0]][3], wins, len(names)),
           transform=ax.transAxes, ha="left", va="bottom", fontsize=10.5,
