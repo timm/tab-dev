@@ -499,12 +499,8 @@ FOREST.votes = (row) =>           -- dict,list; tally, in order
 -- anything wanting a score to rank by (an auc) still has one.
 FOREST.posts = (row) =>           -- dict
   t, ks = @votes(row)
-  z, u = 0, {}
-  for _, k in order ks
-    z += t[k]
-  for _, k in order ks
-    u[k] = t[k] / max(z, 1)
-  u
+  z = 0; z += t[k] for _, k in order ks
+  {k, t[k] / max(z, 1) for _, k in order ks}
 
 FOREST.guess = (row) =>           -- value; the most voted
   t, ks = @votes(row)
