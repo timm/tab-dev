@@ -48,8 +48,8 @@ function scored2(file,who,fun,    dir,fa,fb,tbl,ha,hb,t0,secs,ok,a,b)
   os.execute("mkdir -p " .. dir)
   tbl = Tab(file)
   ha, hb = io.open(fa, "w"), io.open(fb, "w")
-  ha:write("rep,secs,acc,pd,pf,d2h\n")
-  hb:write("rep,secs,auc,klasses\n")
+  ha:write("rep,secs," .. AccCols .. "\n")
+  hb:write("rep,secs," .. AucCols .. "\n")
   for s = 1, reps do
     t0 = os.clock()
     ok, a, b = pcall(fun, pair(tbl, s))
@@ -62,10 +62,10 @@ function scored2(file,who,fun,    dir,fa,fb,tbl,ha,hb,t0,secs,ok,a,b)
   ha:close(); hb:close()
   return fa end
 
--- Return acc,pd,pf,d2h and auc,klasses of one forest over `te`.
+-- Return `AccCols` and `AucCols` of one forest over `te`.
 -- `posts` is the vote share, so the label is its own argmax: the
 -- two answers cannot disagree, as they could if each refit.
-function hardBoth(tr,te,    i,col,bag,post,p,got,n,t,sum,k,a) --> str,str
+function hardBoth(tr,te,    i,col,bag,post,p,got,n,t,cols) --> str,str
   i, col, bag = forest(tr), tr.klass, Bag()
   post = {}
   for _, row in order(te.rows) do
@@ -78,15 +78,13 @@ function hardBoth(tr,te,    i,col,bag,post,p,got,n,t,sum,k,a) --> str,str
       if tally[kk] > n then n, got = tally[kk], kk end end  -- ties: 1st
     post[row] = p
     bag:tally(row[col.at], got) end
-  sum, k = 0, 0
-  for x in pairs(col.has) do
+  cols = {}
+  for _, x in order(keys(col.has)) do         -- sorted, not `pairs`
     t = {}
     for _, row in order(te.rows) do
       t[#t + 1] = {post[row][x] or 0, row[col.at] == x} end
-    a = auc(t)
-    if a then sum, k = sum + a, k + 1 end end
-  return ("%.1f,%.1f,%.1f,%.3f"):format(bag:score()),
-         ("%.4f,%d"):format(k > 0 and sum / k or 0, k) end
+    cols[#cols + 1] = t end
+  return Acc:format(bag:score()), aucline(cols) end
 
 -- ---- one tree --------------------------------------------------------
 -- `ens.py treedeep`: a single tree, every column, leaf 2, grown deep
@@ -105,7 +103,7 @@ function deepFor(tr,    ks,d) --> int
 -- `>` -- while an argmax over `posts` walks `pairs`, whose order no
 -- two ports share.  They differ only on a tie, and only one of them
 -- differs the same way every time.
-function treeBoth(tr,te,    i,col,bag,post,n,t,sum,k,a,was) --> str,str
+function treeBoth(tr,te,    i,col,bag,post,t,cols,was) --> str,str
   was = {the.depth, the.leaf}
   the.depth, the.leaf = deepFor(tr), 2
   i = Tree(tr, tr.rows, function(row) return row[tr.klass.at] end,
@@ -115,15 +113,13 @@ function treeBoth(tr,te,    i,col,bag,post,n,t,sum,k,a,was) --> str,str
   for _, row in order(te.rows) do
     post[row] = i:posts(row)
     bag:tally(row[col.at], i:pick(row).mid) end
-  sum, k = 0, 0
-  for x in pairs(col.has) do
+  cols = {}
+  for _, x in order(keys(col.has)) do         -- sorted, not `pairs`
     t = {}
     for _, row in order(te.rows) do
       t[#t + 1] = {post[row][x] or 0, row[col.at] == x} end
-    a = auc(t)
-    if a then sum, k = sum + a, k + 1 end end
-  return ("%.1f,%.1f,%.1f,%.3f"):format(bag:score()),
-         ("%.4f,%d"):format(k > 0 and sum / k or 0, k) end
+    cols[#cols + 1] = t end
+  return Acc:format(bag:score()), aucline(cols) end
 
 -- ---- rigs ------------------------------------------------------------
 -- ARM names the pair of csvs written, so this rig can fill the

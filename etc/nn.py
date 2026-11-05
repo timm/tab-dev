@@ -11,7 +11,7 @@ usage: python3 ,/nn.py tabicl f.csv   (writes <cache>/<set>/tabicl.csv)
 import os, sys, time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import min as M
-from score import aucs  # one auc for every arm, so they compare
+from score import Acc, Auc, aucs, macro  # one auc for every arm, so they compare
 
 Cache = os.path.expanduser(os.getenv("CACHE", "~/tmp/cache"))
 Reps  = int(os.getenv("REPS", 20))
@@ -78,25 +78,6 @@ def xy(t, i, klass, file):
     y.append(str(r[klass.at]) if klass else goal(t, file)(r))
   return X, y
 
-def macro(want, got):
-  "Accuracy, then abcd.awk's macro pd, pf and d2h."
-  n, ok, ws, gs, hs = len(want), 0, {}, {}, {}
-  for a, b in zip(want, got):       # a klass may be int here, str
-    a, b = str(a), str(b)           # there: sklearn coerces mixed
-    ok += a == b
-    ws[a] = ws.get(a, 0) + 1
-    gs[b] = gs.get(b, 0) + 1
-    if a == b: hs[a] = hs.get(a, 0) + 1
-  pd = pf = d2h = 0
-  for x, w in ws.items():
-    tp = hs.get(x, 0); fp = gs.get(x, 0) - tp; fn = w - tp
-    tn = n - fn - fp - tp
-    r1 = tp / (tp + fn)
-    f1 = fp / (fp + tn) if fp + tn else 0
-    pd += r1; pf += f1; d2h += ((1-r1)**2 + f1**2) ** .5 / 2 ** .5
-  k = len(ws)
-  return f"{100*ok/n:.1f},{100*pd/k:.1f},{100*pf/k:.1f},{d2h/k:.3f}"
-
 def rank(want, got):
   "Label its best CHECK guesses: where does the best of those sit?"
   order = sorted(range(len(got)), key=lambda j: got[j])
@@ -153,8 +134,8 @@ def main(who, file):
     secs   = time.time() - t0
     lines.append(f"{s},{secs:.4f},{line}")
   with open(out, "w") as f:
-    f.write("rep,secs," + ("auc,klasses" if auc else
-                           "acc,pd,pf,d2h" if klass else "rank,mae") + "\n")
+    f.write("rep,secs," + (Auc if auc else
+                           Acc if klass else "rank,mae") + "\n")
     f.write("\n".join(lines) + "\n")
   print(out)
 

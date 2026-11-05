@@ -19,7 +19,7 @@ import sys, os, time, math
 sys.path.insert(0, os.path.expanduser("~/gh/tab"))
 import tab as T
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from score import auc1
+from score import Acc, Auc, auc1, macro, aucposts
 
 Cache = os.path.expanduser(os.getenv("CACHE", "~/gh/tab-dev/cache"))
 Reps  = int(os.getenv("REPS", "20"))
@@ -170,41 +170,20 @@ class Either:
     p = i.posts(row)
     return max(p, key=p.get) if p else None
 
-def macro(want, got):
-  "Accuracy, then abcd's macro pd, pf and d2h -- lgbm.py's own code."
-  n, ok, ws, gs, hs = len(want), 0, {}, {}, {}
-  for a, b in zip(want, got):
-    a, b = str(a), str(b)
-    ok += a == b
-    ws[a] = ws.get(a, 0) + 1
-    gs[b] = gs.get(b, 0) + 1
-    if a == b: hs[a] = hs.get(a, 0) + 1
-  pd = pf = d2h = 0
-  for x, w in ws.items():
-    tp = hs.get(x, 0); fp = gs.get(x, 0) - tp; fn = w - tp
-    tn = n - fn - fp - tp
-    r1 = tp / (tp + fn)
-    f1 = fp / (fp + tn) if fp + tn else 0
-    pd += r1; pf += f1; d2h += ((1-r1)**2 + f1**2) ** .5 / 2 ** .5
-  k = len(ws)
-  return f"{100*ok/n:.1f},{100*pd/k:.1f},{100*pf/k:.1f},{d2h/k:.3f}"
-
-def macroAuc(want, posts):
-  "Macro mean of each klass's one-against-the-rest auc, and its count."
-  ks  = sorted({k for p in posts for k in p}, key=str)   # a klass may
-  out = [a for k in ks                                   # be an int, so
-         if (a := auc1([p.get(k, 0) for p in posts],     # look it up as
-                       [str(w) == str(k) for w in want]  # itself, and
-                       )) is not None]                   # compare as text
-  return f"{sum(out)/len(out):.4f},{len(out)}" if out else "0,0"
+# `macro` and the auc now live in score.py.  They were copied into
+# ens.py, lgbm.py and nn.py, which meant a change to the metric was
+# three edits and a silent mismatch if any were missed -- and a
+# mismatch between arms is indistinguishable from a result.
+def macroAuc(want, posts):           # the name ablate.py, knobs.py
+  return aucposts(want, posts)       # and sizesweep.py already import
 
 def one(arm, file):
   t = T.Tab(file)
   if not t.klass: return print(f"skip {file}: no klass", file=sys.stderr)
   d = home(file)
   os.makedirs(d, exist_ok=True)
-  acc = [f"rep,secs,acc,pd,pf,d2h"]
-  auc = [f"rep,secs,auc,klasses"]
+  acc = [f"rep,secs,{Acc}"]
+  auc = [f"rep,secs,{Auc}"]
   for s in range(1, Reps + 1):
     tr, te = pair(t, s)
     fit, bins = Arms[arm]
