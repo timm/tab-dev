@@ -111,8 +111,7 @@ function deepFor(tr,    ks,d) --> int
 function treeBoth(tr,te,    i,col,bag,post,t,cols,was) --> str,str
   was = {the.depth, the.leaf}
   the.depth, the.leaf = deepFor(tr), 2
-  i = Tree(tr, tr.rows, function(row) return row[tr.klass.at] end,
-           Sym, 1, 0)                      -- `0`: every column
+  i = Tree(tr, tr.rows, 1, 0)           -- `0`: every column
   the.depth, the.leaf = was[1], was[2]
   col, bag, post = tr.klass, Bag(), {}
   for _, row in order(te.rows) do

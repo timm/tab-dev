@@ -13,7 +13,9 @@ from score import Acc, Auc, aucs, macro
 from lightgbm import LGBMClassifier, LGBMRegressor
 
 Cache = os.path.expanduser(os.getenv("CACHE", "~/tmp/cache"))
-Reps  = 20
+# REPS: an override for timing runs, mirroring forest-eg.lua, so
+# both sides of a comparison can be asked for the same count.
+Reps  = int(os.getenv("REPS") or 20)
 
 def home(f):
   "Where this data set's scores live, mirroring moot's tree."
@@ -61,6 +63,9 @@ def klassOf(t, file):
   if c is None or type(c) is M.SYM: return c
   return c if len({r[c.at] for r in t.rows}) <= 30 else None
 
+Jobs = ({"n_jobs": int(os.environ["LGBM_JOBS"])}
+        if os.getenv("LGBM_JOBS") else {})
+
 def main(file):
   "Score LightGBM on every rep, unless that was already done."
   who = "lgbmauc" if os.getenv("AUC") else "lgbm"
@@ -78,7 +83,12 @@ def main(file):
     X1, y1 = xy(tr, i, klass, file)
     X2, y2 = xy(te, i, klass, file)
     t0     = time.time()
-    model  = (LGBMClassifier if klass else LGBMRegressor)(verbose=-1)
+    # n_jobs: LightGBM defaults to every core, while tab is single
+    # threaded.  A timing run must say which it wants -- LGBM_JOBS=1
+    # for the per-core claim, unset for "as shipped".  Scores do not
+    # depend on it, only seconds do.
+    model  = (LGBMClassifier if klass else LGBMRegressor)(
+               verbose=-1, **Jobs)
     model.fit(X1, y1)
     if who == "lgbmauc":
       line = aucs(model, X2, y2)

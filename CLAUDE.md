@@ -132,16 +132,31 @@ used a flat 0.5 tie band, so on auc's 0-1 scale every set was a tie;
 `charts.py` the `arms` figure shadowed the `arms` helper, so `clas`
 could not be drawn at all (helper is now `ranarms`).
 
-**Faster forest: 4.66x, same answers** (Nov 5-6). Four changes to
-`tab.yue`'s cut search, each measured against the 40-file identity
-check (8 sets x nb, hardeep, hardeepauc, treedeep, treedeepauc):
+**Faster forest: 6.7x end to end, same answers** (Nov 5-6). The cut
+search was rebuilt in two rounds. Every row below is a CLEAN
+measurement: one process holding both libraries, timings INTERLEAVED
+so the E-core scheduler cannot favour whichever ran first, MINIMUM of
+5 (scheduling only ever adds), whole forest builds on 14 real sets,
+single threaded, nothing else on the machine.
 
 | change | vs original | results |
 |---|---|---|
-| pooled allocations in `TAB.cut` | 1.64x | byte-identical |
-| cdata points + inlined sort | 2.03x | byte-identical |
-| binned cut search (`cuts`) | 2.41x | approximate |
-| histogram, numeric and symbolic | **4.66x** | indistinguishable |
+| histogram cut search (replaces the sort) | 2.23x | indistinguishable |
+| + bin ids and klass codes cached on the row | **6.72x** | indistinguishable |
+
+Sum of seconds over the 14 sets: 22.75 -> 3.25, a 6.99x that agrees
+with the 6.72x geometric mean. The two stages measured separately
+multiply to 6.58x, which agrees with the 6.72x measured end to end --
+so the decomposition is real and not an artifact of either run.
+
+**A 10.15x was claimed for the first stage and it was wrong.** That
+number came from corpus wall clock with `-P 5` on BOTH sides. The old
+search is far more garbage-collection heavy, and five concurrent
+GC-heavy processes punish each other more than five lean ones do, so
+contention flattered the new code by a factor of four. Measured
+single threaded, that stage is 2.23x. Any speedup taken from a
+parallel corpus run is measuring the scheduler as much as the code --
+the reason `secs.png` still carries the warning below.
 
 `luajit -jp=vf` found 45% of a forest run in the garbage collector,
 86% of it under `cut`, which built `rows x cols` throwaway tables at
@@ -219,6 +234,55 @@ Settle this before citing either number.
   comparisons stay fair.
 - Timings were measured under parallel load. A clean single-threaded
   pass is needed before `secs.png` carries a strong claim.
+- **The tab-vs-LightGBM seconds are not a comparison.** `etc/lgbm.py`
+  times with `time.time()` -- wall -- and never set `n_jobs`, so
+  LightGBM took all 10 cores; `tab-eg.lua` times with `os.clock()` --
+  cpu -- on one thread. Different units, and both ran under `xargs
+  -P 5`, which for LightGBM is 50-way oversubscription and for tab is
+  exile to the e-cores. Two errors in opposite directions. `n_jobs` and
+  `REPS` are now settable from the environment (`LGBM_JOBS=1` for the
+  per-core question, unset for as-shipped); until a clean pass exists,
+  the `raw.png` left panel and any "x faster than LightGBM" claim are
+  not evidence.
+- **moot's klass markers mistyped six classify sets** (fixed upstream in
+  moot `37d9853`). The `!` had been appended to the last column, which
+  in four sets is a continuous feature, so `wine`, `spectf.test`,
+  `spectf.train` and `spectrometer` came back with a Num klass and a
+  classification-only `Tree` could not run at all; `mnist_1` had the
+  right column in the wrong case. Worse, `spambase` has a feature
+  counting occurrences of `!`, named `CHAR_FREQ_!`, whose trailing `!`
+  collided with the marker -- so it was read as a goal and dropped from
+  the x columns, and **every spambase number before this was learned
+  from 56 features, not 57**. `credit.g` and `sponge` each had a
+  categorical column summarised as a number. All eight were rerun; any
+  cache or figure older than that commit is stale for those sets.
+- `bridges.version1` and `bridges.version2` carry two rows each whose
+  klass is `?`. A leaf holding only those has no majority, so `mid` is
+  nil and `BAG.tally` indexes on nil -- seed-dependent, so it looks
+  intermittent. `nb` does not crash; it scores `?` as if it were a
+  klass. 2 sets of 120, 2 rows of 107, so the contamination is small,
+  but it is there and unfixed.
+- `pf` scored an undefined measurement as a perfect one. When a test
+  split lands all-one-klass, that klass has no negatives, so there is
+  no false alarm rate -- and both scorers wrote 0. `fp + tn` is
+  `N - n_k`, so the guard fires exactly when one klass is the whole
+  split, which means no second klass survives it: the whole rep has no
+  `pf`, `d2h`, `macropf` or `macrod2h`. Fixed in `tab-eg.lua`'s
+  `BAG.score1`/`BAG.score` and `etc/score.py`'s `macro`, which now
+  report a `klasses` column as the sentinel, the same bargain `AucCols`
+  already made. `charts.py` reads `pf` and `d2h` through `pfs()`, and
+  everything through `vals()`.
+  50 of 2300 forest reps, concentrated in 6 tiny sets; the bias is
+  **downward**, so it flattered every arm. Only two medians move:
+  `weather` pf 0.0 -> 16.7 and `shuttle.landing.control` 0.0 -> 66.7
+  (a 15-row set, 17 of 20 reps degenerate). Verified lua and python
+  agree digit-for-digit on the degenerate and normal cases, and that
+  `acc` and `pd` are unchanged on every rep of 7 sets.
+
+  **The caches and every figure predate the fix.** A cache with no
+  `klasses` column reads exactly as it did before -- checked over 6376
+  columns -- so old figures still draw, at their old numbers. The
+  corpus has not been regenerated.
 
 ## Ancestry
 

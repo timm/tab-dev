@@ -45,11 +45,20 @@ def abcd(want, got):
     out[x] = (tp, fp, fn, n - tp - fp - fn, w)
   return out, n, ok
 
-Acc = "acc,pd,pf,d2h,macropd,macropf,macrod2h"
+Acc = "acc,pd,pf,d2h,macropd,macropf,macrod2h,klasses"
 
 def macro(want, got):
   """`Acc`: accuracy, then pd, pf and d2h weighted by klass frequency,
   then the same three averaged equally over klasses.
+
+  The klass count comes last, and the reader needs it: `fp + tn` is
+  `N - n_k`, so it is zero exactly when every test row is klass k.
+  That klass has no negatives, so there is no false alarm rate and no
+  d2h built on one -- and since the guard can only fire for a klass
+  that *is* the whole test set, no second klass survives it.  So the
+  four pf and d2h columns of a one-klass split are written 0 and mean
+  nothing; gate on `klasses > 1`.  Writing a real 0 there would score
+  a measurement that does not exist as a flawless one.
 
   pd is accuracy.  Weighting recall by support gives
   sum_k (n_k/N)(tp_k/n_k) = sum_k tp_k / N, which is the hit rate --
@@ -62,13 +71,15 @@ def macro(want, got):
   wpd = wpf = wd2h = mpd = mpf = md2h = 0.0
   for tp, fp, fn, tn, w in parts.values():
     r1 = tp / (tp + fn)
-    f1 = fp / (fp + tn) if fp + tn else 0
+    wpd += w * r1; mpd += r1
+    if fp + tn == 0: continue
+    f1 = fp / (fp + tn)
     d1 = ((1 - r1) ** 2 + f1 ** 2) ** .5 / 2 ** .5
-    wpd += w * r1; wpf += w * f1; wd2h += w * d1
-    mpd += r1;     mpf += f1;     md2h += d1
+    wpf += w * f1; wd2h += w * d1
+    mpf += f1;     md2h += d1
   k = len(parts)
   return (f"{100*ok/n:.1f},{100*wpd/n:.1f},{100*wpf/n:.1f},{wd2h/n:.3f},"
-          f"{100*mpd/k:.1f},{100*mpf/k:.1f},{md2h/k:.3f}")
+          f"{100*mpd/k:.1f},{100*mpf/k:.1f},{md2h/k:.3f},{k}")
 
 def auc1(scores, wants):
   "Area under the roc curve, from the rank sum.  Ties share a place."

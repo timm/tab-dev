@@ -65,8 +65,7 @@ function deepFor(tr,    ks,d) --> int
 function deepTree(tr,    i,was) --> TREE
   was = {the.depth, the.leaf}
   the.depth, the.leaf = deepFor(tr), 2
-  i = Tree(tr, tr.rows, function(row) return row[tr.klass.at] end,
-           Sym, 1, 0)                      -- `0`: every column
+  i = Tree(tr, tr.rows, 1, 0)           -- `0`: every column
   the.depth, the.leaf = was[1], was[2]
   return i end
 

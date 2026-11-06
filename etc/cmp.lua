@@ -28,6 +28,10 @@ function go(file,    tr,te,y,r45,rall,t,gs,out)
   tr, te, y = halves()
   r45  = Rmeans(tr, head1(tr.rows, the.budget - the.check), y)
   rall = Rmeans(tr, tr.rows, y)
+  -- STALE: `Tree` grows over a klass only now -- `y` here is `ydist`,
+  -- a distance, which it never really supported (its own comment said
+  -- so).  Left broken on purpose rather than quietly given a klass it
+  -- was not asked for.  Use `Rmeans` for a continuous target.
   t    = Tree(tr, tr.rows, y)
   out  = {}
   for _, a in ipairs{{"rmeans45", function(row) return r45:guess(row) end},
