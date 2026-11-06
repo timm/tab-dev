@@ -241,9 +241,40 @@ Settle this before citing either number.
   -P 5`, which for LightGBM is 50-way oversubscription and for tab is
   exile to the e-cores. Two errors in opposite directions. `n_jobs` and
   `REPS` are now settable from the environment (`LGBM_JOBS=1` for the
-  per-core question, unset for as-shipped); until a clean pass exists,
-  the `raw.png` left panel and any "x faster than LightGBM" claim are
-  not evidence.
+  per-core question, unset for as-shipped). **Measured 2026-11-06**,
+  per fit, startup excluded by construction (both programs time their
+  own reps), minimum over 3 interleaved runs, quiet machine, lgbm at
+  `n_jobs=1` -- the only setting where its `time.time()` and tab's
+  `os.clock()` denote the same thing -- over the 14-set timing list:
+
+      tab 2.088s   lgbm 5.061s   2.42x by sum, 1.52x geometric mean
+      tab wins 7 of 14 sets and loses 7
+
+  So the ~9x on `raw.png` is wrong by about 4x, and the real result is
+  a split decision: tab wins where klasses are many (MiceProtein
+  11.8x, audiology 6.7x, primary.tumor 6.1x) and loses on binary sets
+  (credit.g 0.18x, kr.vs.kp 0.35x, diabetes 0.46x). Two things made
+  the old number: python plus `import lightgbm` costs 1.31s per
+  process against luajit's 0.039s, and LightGBM's default threading
+  costs it **4.6x** on sets this small -- thread setup exceeds the
+  work -- which `-P 8` then multiplied.
+
+  A first attempt at this measurement was itself wrong, in the same
+  way as everything else here: it ran tab straight after an all-core
+  lgbm run, so tab landed on the e-cores and `os.clock()` read 3x
+  high (waveform5000, 1.59s/rep there against 0.50s/rep alone). Any
+  timing harness that interleaves a threaded arm with a single
+  threaded one has to be read as suspect until a minimum, not a mean,
+  says otherwise.
+
+  `raw.png`, `rawclas.png`, `secs.png` and `cost.png` still read the
+  `secs` column out of the `-P 8` corpus caches and are NOT fixed by
+  the above, which is a separate 14-set harness. Repairing them needs
+  a clean corpus-wide pass: about 25 min for tab, 45 for lgbm, and
+  roughly 35 hours for tabicl, which is why the honest option is to
+  stop putting seconds on a figure whose three curves were each
+  measured a different way. `auc.png` and `pdpf.png` read no `secs`
+  and are unaffected.
 - **moot's klass markers mistyped six classify sets** (fixed upstream in
   moot `37d9853`). The `!` had been appended to the last column, which
   in four sets is a continuous feature, so `wine`, `spectf.test`,
