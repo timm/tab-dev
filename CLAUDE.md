@@ -5,10 +5,17 @@ Experiments on the `tab` learner. The library itself lives next door in
 the argument. Nothing here is shipped.
 
 `,/sh` is the work shell. It sets `TAB` to the sibling checkout and puts
-it on `LUA_PATH`, so an edit in `../tab/tab.lua` is live here with no
-reinstall. Do **not** `luarocks make` for development: that copies the
-file into the rocks tree, and the local luarocks targets Lua 5.5 while
-everything here runs under luajit (5.1).
+it on `LUA_PATH`, so an edit in `../tab` is live here with no reinstall.
+Do **not** `luarocks make` for development: that copies the file into
+the rocks tree, and the local luarocks targets Lua 5.5 while everything
+here runs under luajit (5.1).
+
+**`../tab/tab.lua` is generated from `../tab/tab.yue`** (moved there
+2026-11-05; it used to live in this repo). Edit the `.yue` and run
+`../tab/,/build`, which prints a sha1 to pin a corpus to. An edit to
+`tab.lua` is lost at the next build. The rigs here -- `etc/forest-eg.lua`,
+`etc/fft-eg.lua`, `etc/rnb-eg.lua` -- take `TABDIR` so one build can be
+pointed at, rather than recompiled per data set.
 
     ,/sh            the work shell
     ,/run nb        rerun an arm over moot, into cache/
@@ -124,6 +131,71 @@ used a flat 0.5 tie band, so on auc's 0-1 scale every set was a tie;
 `rank.py` and `sig.py` counted a *bigger* pf or d2h as a win; and in
 `charts.py` the `arms` figure shadowed the `arms` helper, so `clas`
 could not be drawn at all (helper is now `ranarms`).
+
+**Faster forest: 4.66x, same answers** (Nov 5-6). Four changes to
+`tab.yue`'s cut search, each measured against the 40-file identity
+check (8 sets x nb, hardeep, hardeepauc, treedeep, treedeepauc):
+
+| change | vs original | results |
+|---|---|---|
+| pooled allocations in `TAB.cut` | 1.64x | byte-identical |
+| cdata points + inlined sort | 2.03x | byte-identical |
+| binned cut search (`cuts`) | 2.41x | approximate |
+| histogram, numeric and symbolic | **4.66x** | indistinguishable |
+
+`luajit -jp=vf` found 45% of a forest run in the garbage collector,
+86% of it under `cut`, which built `rows x cols` throwaway tables at
+every node of every tree. Pooling those is the 1.64x and costs
+nothing. After that `-jp=l` put 55% in `table.sort`'s comparator --
+C calling back into Lua once per comparison, which the JIT cannot
+inline.
+
+The histogram wins by NOT sorting and by NOT accumulating. `Sym.add`
+keeps an entropy cache (`cl + c*log c`), so the old search spent a
+`log` per row per column per node; counting into `(bin x klass)` and
+taking entropy from cumulative counts at the boundaries replaces
+~3N logs with a few hundred. Klass strings are coded to integers
+once per node, so no inner loop hashes a string. `symHist` does the
+same for symbolic columns and is EXACT -- every value still
+considered, same sorted order -- which retired `SYM.cut`'s O(V*R)
+rescan.
+
+Over 115 sets at `cuts=51`: pd 83.7 vs 83.7, pf 21.9 vs 21.9, auc
+.878 vs .877, with wins and losses balanced (58/44, 55/47, 51/53)
+and every median delta exactly 0. That is tie-cascade noise, not
+degradation. `cuts=0` remains the default and is still byte-identical
+to the published corpus.
+
+**`cuts` sets resolution, not range.** Written the other way round at
+first -- a fixed `sd/2` bin width with `cuts` widening the span --
+which made 13 and 101 bins behave identically, since almost nothing
+lies beyond 3sd to reach. That bug produced a whole afternoon of
+"binning costs quality" results. It does not: at `cuts=13`
+hypothyroid's auc is .829, at `cuts=51` it is .982, at 101 it is .996
+against .999 exact.
+
+**`cutTill` is not worth keeping.** Recomputing bin edges from each
+node's rows (`cutTill=12`) is slower AND slightly worse than taking
+the column's own mu/sd once (`cutTill=0`): 88.6 vs 88.8 accuracy for
+78% more time. With `leaf=2`, by the time global edges stop
+discriminating the node is too small to split anyway.
+
+**Rejected this round:**
+
+| attempt | result |
+|---|---|
+| FFT pruning (`etc/fft-eg.lua`) | 2-klass only: 82.8 vs the forest's 84.5 at 17x less time. Many-klass collapses (43.3 vs 94.2) and auc is last of six arms (.825 vs .890) -- a chain gives `k+1` regions where a tree gives `#leaves`, and the vote-share posterior has only `k+1` distinct values to rank by. Raising the label ceiling 13 -> 29 changed nothing; the limit is regions, not labels. |
+| random naive Bayes (`etc/rnb-eg.lua`) | +0.6 pd over plain nb, worse auc and pf. `COLS=all` reproduces nb exactly, so bagging alone does nothing; column subspaces subtract information monotonically (sqrt 77.0, half 81.2, all 81.8); 10 members and 100 members are the same model. Bagging pays for UNSTABLE learners and NB is a closed-form count -- Breiman's condition fails. Untested and not covered by that argument: boosting NB, which creates diversity by reweighting the target. |
+
+**Timing on this box needs the MINIMUM of several runs.** Four
+separate traps cost hours here: my own concurrent jobs; mean-over-reps
+including JIT warmup vs median-rep; a kernel benchmark whose size
+distribution did not match the real workload (one sort of 1080 where
+the tree does thousands of tiny ones); and, worst, Apple silicon
+scheduling a whole run onto an efficiency core, which triples
+`os.clock()` -- CPU time -- for identical work. Medians do not help
+with the last one because it lands on entire runs. Two benchmarks
+disagreed 3.6x on unchanged code before this was understood.
 
 ## Open and unresolved
 

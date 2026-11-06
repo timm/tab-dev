@@ -45,7 +45,65 @@ Look = {
   "bagbodeep": ("#4a9c6d", "-.", "D", "boosted bags of deep trees"),
   "either":    ("#122b0f", "-",  "*", "deep forest or naive Bayes, "
                                       "chosen on train"),
-  "hardeep":   ("#1f5f9e", "--", "s", "forest of 30, hard vote")}
+  "hardeep":   ("#1f5f9e", "--", "s", "forest of 30, hard vote"),
+  # Two arms tried and rejected (see tab-dev/CLAUDE.md).  They are
+  # listed so a cache holding them can be drawn; the live cache does
+  # not, so the glob below keeps them out of the standing figures.
+  "fft":       ("#d95f02", ":",  "P", "best frugal chain off one tree"),
+  "rnb":       ("#8c6bb1", ":",  "X", "30 naive Bayes, subspaces"),
+  # The same forest, with the numeric cut search done over `cuts`
+  # bins instead of every distinct value -- no sort at all.  Drawn
+  # beside `hardeep` so the approximation is visible, not assumed.
+  "hardbin":   ("#e6550d", "-.", "D", "forest of 30, 13-bin cuts"),
+  # The histogram build: same 30-tree forest, cut search done by
+  # counting into (bin x klass) rather than accumulating `Sym`s.
+  "hardhist":  ("#31a354", "-.", "^", "forest of 30, histogram cuts")}
+
+# A short name per arm, for places where the long one does not fit.
+# The strip above each panel prints five of these side by side, and
+# the long names ran off the right edge of the figure -- text that
+# leaves the canvas is not a styling problem, it is a number the
+# reader cannot see.  The legend carries both, so the two vocabularies
+# are tied together once, where the reader meets them.
+Short = {"nb": "bayes", "nb72": "bayes", "treedeep": "1tree",
+         "hardeep": "30tree", "lgbm": "lgbm", "tabicl": "tabicl",
+         "tabpfn": "tabpfn", "treemaj": "1tree", "treenb": "1tree+nb",
+         "fordeep": "30tree", "for60": "60tree", "rmeans": "rmeans",
+         "rmeansall": "rmeans-all", "fft": "fft", "rnb": "rnb",
+         "hardbin": "30tree/bin", "hardhist": "30tree/hist"}
+
+def short(w):
+  "WHO's short name, reaching through an -auc suffix."
+  return Short.get(w) or Short.get(w[:-3]) or w
+
+def agree(ax, names, a, b, tol, note=None):
+  """Shade the sets where `a` and `b` land within `tol` of each other.
+
+  The question a reader asks of these figures is not "which line is
+  on top" but "where is the cheap arm already as good as the dear
+  one".  A grey column says: on this set, these two agree.  `tol` is
+  in the measure's own units -- 5 points of a percentage, 0.05 of an
+  auc -- so it means the same fraction of full scale either way.
+  """
+  hit = [i for i, n in enumerate(names)
+         if a.get(n) is not None and b.get(n) is not None
+         and abs(a[n] - b[n]) <= tol]
+  for i in hit:
+    ax.axvspan(i - .5, i + .5, color="#000000", alpha=.07, lw=0, zorder=0)
+  return hit
+
+def dashes(ax, step):
+  "Dashed guides every STEP, unlabelled: a ruler, not more numbers."
+  ax.yaxis.set_minor_locator(MultipleLocator(step))
+  ax.grid(axis="y", which="minor", color="#dddddd", lw=.6,
+          linestyle=(0, (2, 3)), zorder=0)
+  ax.tick_params(axis="y", which="minor", length=0)
+
+# Name a band by the group its rows are actually in.  Zipping the
+# three names onto the spans breaks the moment a band is empty: with
+# no 3-5 klass set in the corpus there is one edge, not two, and the
+# 6+ span silently takes the "3-5 klasses" label.
+Band = ("2 klasses", "3-5 klasses", "6+ klasses")
 
 def cells(dir, who, col):
   "Column COL of DIR's WHO.csv, one number per rep."
@@ -200,8 +258,8 @@ def clas():
            transform=a.transAxes, ha="left", va="bottom", fontsize=10.5,
            color="#333333")
     if k == 0:
-      for lo, hi, lab in zip([0] + edge, edge + [len(names)],
-                             ("2 klasses", "3-5 klasses", "6+ klasses")):
+      for lo, hi in zip([0] + edge, edge + [len(names)]):
+        lab = Band[grp[names[lo]]]
         a.text((lo + hi - 1) / 2, .97, f"{lab}  (n={hi - lo})",
                transform=a.get_xaxis_transform(), ha="center", va="top",
                fontsize=9, color="#555555")
@@ -422,6 +480,64 @@ def raw():
   f.savefig(f"{Docs}/raw.png", bbox_inches="tight"); plt.close(f)
   print(f"{Docs}/raw.png")
 
+def rawclas():
+  """Absolute seconds per run, the five classification arms only.
+
+  raw.png puts classify beside regression and optimize, and there the
+  tab arm has to be whichever one that task has -- a forest where
+  there are klasses to vote on, rmeans where there are not.  One task
+  needs no such substitution, so all five arms of the klass story can
+  stand in one panel and be read against each other directly: the two
+  single models, the two ensembles, and the neural one.
+
+  Sorted per curve, not per set.  A cost curve answers "what does
+  this arm cost across a corpus", and pairing the sets would answer
+  a different question badly -- the arms do not agree on which set
+  is the expensive one.
+  """
+  who = [w for w in ("nb", "treedeep", "hardeep", "hardhist", "lgbm", "tabicl")
+         if glob.glob(f"{Cache}/classify/*/{w}.csv")]
+  S   = sets("classify", who)
+  cur = {w: sorted(st.fmean(v) for _, d in S if (v := cells(d, w, "secs")))
+         for w in who}
+  lab = dict(Look); lab["nb"] = Look["nb72"]
+  f, a = plt.subplots(figsize=(10, 6.2), dpi=200)
+  a.spines[["top", "right"]].set_visible(False)
+  a.grid(axis="y", color="#eeeeee", zorder=0)
+  for w in who:
+    xs = cur[w]
+    if not xs: continue
+    # Each curve's own n beside its total: a slow arm that ran on
+    # fewer sets can show the smaller total and still be the dearer
+    # learner.  These are five corpora, not five columns.
+    a.plot(range(1, len(xs) + 1), xs, "-", color=lab[w][0], lw=2.2,
+           zorder=3, label="{}: {}   {} sets, total {:,.0f}s".format(
+             short(w), lab[w][3], len(xs), sum(xs)))
+  a.set_yscale("log")
+  # Up to 1000s whatever the data reaches.  A log axis cropped to the
+  # slowest arm makes that arm look pinned to the ceiling, and the
+  # ceiling then moves every time a slower set lands -- so two
+  # redraws of the same figure would not be comparable.
+  a.set_ylim(top=1e3)
+  top = max(max(v) for v in cur.values() if v)
+  for y, t in ((1, "1 second"), (60, "1 minute"), (3600, "1 hour")):
+    if y <= top:
+      a.axhline(y, color="#cccccc", lw=1, zorder=1)
+      # Right-hand end, not left: the legend sits top-left, and at
+      # 1 minute the label landed underneath it.
+      a.text(1, y, t + " ", fontsize=8, color="#999999", va="bottom",
+             ha="right", transform=a.get_yaxis_transform())
+  a.legend(frameon=False, fontsize=9, loc="upper left")
+  a.set_xlabel(f"{len(S)} moot/classify sets, each curve sorted on its own",
+               fontsize=10, labelpad=10)
+  a.set_ylabel("seconds for one fit and predict,\n"
+               "mean of 20 seeds  (log)", fontsize=11)
+  a.set_title("What one fit and predict costs on a klass problem",
+              fontsize=13, pad=14)
+  f.tight_layout()
+  f.savefig(f"{Docs}/rawclas.png", bbox_inches="tight"); plt.close(f)
+  print(f"{Docs}/rawclas.png")
+
 def cost():
   "Seconds against training rows: how each arm grows with the data."
   mine = {"classify": "nb72", "regression": "rmeans"}
@@ -497,7 +613,8 @@ def auc():
   # reaches.  Grey asks one question -- is the forest TabICL yet?
   who = tuple(["hardeepauc", "lgbmauc"]
               + [w for w in ("tabiclauc", "tabpfnauc",
-                             "treedeepauc", "nbauc")
+                             "treedeepauc", "nbauc", "fftauc", "rnbauc",
+                             "hardbinauc", "hardhistauc")
                  if glob.glob(f"{Cache}/classify/*/{w}.csv")])
   Pair = ("hardeepauc", "tabiclauc")   # what the sort and sd strip use
   # Complete cases only: every arm drawn had to run on every set
@@ -524,12 +641,26 @@ def auc():
   has = lambda w, n: n in med[w]          # an arm that declined this set
   grp = {n: (0 if klasses(n) == 2 else 1 if klasses(n) <= 5 else 2)
          for n, _ in keep}
-  # Inside each band, by how far the hard-vote forest sits from
-  # TabICL: the left of a band is where it loses worst, the right
-  # where it has caught up.  One question, read left to right.
-  keep.sort(key=lambda nd: (grp[nd[0]],
-                            med[Pair[0]][nd[0]] - med[Pair[1]][nd[0]]
-                            if all(has(w, nd[0]) for w in Pair) else 9))
+  # Inside each band, by TabICL's own auc, ascending -- the same key
+  # pdpf.png sorts on, so a set sits in a comparable place in both
+  # figures and the two can be read against each other.
+  #
+  # SORTBY=gap restores the older key: how far the hard-vote forest
+  # sits from TabICL, left losing worst and right caught up.  That
+  # one answers "is the forest TabICL yet"; this one answers "where
+  # is this corpus hard".
+  Sortby = os.getenv("SORTBY", "hardeep")
+  if Sortby == "gap":
+    keep.sort(key=lambda nd: (grp[nd[0]],
+                              med[Pair[0]][nd[0]] - med[Pair[1]][nd[0]]
+                              if all(has(w, nd[0]) for w in Pair) else 9))
+    kname = "the gap to TabICL"
+  else:
+    lead = next((w for w in (Sortby + "auc", Sortby) if w in med), Pair[0])
+    keep.sort(key=lambda nd: (grp[nd[0]], med[lead].get(nd[0], 9)))
+    # Look gains its *auc aliases further down, after this sort, so
+    # reach through to the base arm rather than depend on that order.
+    kname = f"{Look[lead if lead in Look else lead[:-3]][3]}'s own auc"
   names = [n for n, _ in keep]
   edge  = [j for j in range(1, len(names))         # where a group ends
            if grp[names[j]] != grp[names[j - 1]]]
@@ -557,6 +688,12 @@ def auc():
   for a in (ax, sx):
     a.spines[["top", "right"]].set_visible(False)
     a.grid(axis="y", color="#eeeeee", zorder=0)
+  # Grey column: the new forest and TabICL land within 0.05 auc here
+  # -- the same fraction of full scale as pdpf's 5 points.
+  Near = ("tabiclauc", "hardhistauc")
+  shade = (agree(ax, names, med[Near[0]], med[Near[1]], .05)
+           if all(w in med for w in Near) else [])
+  if shade: agree(sx, names, med[Near[0]], med[Near[1]], .05)
   for a in (ax, sx):
     for j in edge: a.axvline(j - .5, color="#999999", lw=1, zorder=2)
   # The full range, so a gap is read against the whole scale and not
@@ -568,8 +705,9 @@ def auc():
             [med[w][n] if has(w, n) else float("nan") for n in names],
             ls, color=col,
             marker=mk or "o", ms=4, lw=1.4,
-            label=lab, zorder=3)
+            label="{}: {}".format(short(w), lab), zorder=3)
   ax.set_ylim(Floor, 1)
+  dashes(ax, .05)            # auc runs 0-1, so 0.05 is the 5% step
   low = sorted((med[w][n], Look[w][3], n) for w in who for n in names
                if has(w, n) and med[w][n] < Floor)
   note = ""
@@ -577,27 +715,31 @@ def auc():
     note = ("\nthe axis starts at {:g}; below it, off scale:  "
             .format(Floor)
             + ";  ".join(f"{lab} {n} {v:.2f}" for v, lab, n in low))
-  for lo, hi, lab in zip([0] + edge, edge + [len(names)],
-                         ("2 klasses", "3-5 klasses", "6+ klasses")):
+  for lo, hi in zip([0] + edge, edge + [len(names)]):
+    lab = Band[grp[names[lo]]]
     if hi > lo:
       ax.text((lo + hi - 1) / 2, .02, f"{lab}  (n={hi - lo})",
               transform=ax.get_xaxis_transform(), ha="center", va="bottom",
               fontsize=9, color="#555555")
   ax.legend(frameon=False, fontsize=10, ncol=len(who) + 1,
             loc="lower center", bbox_to_anchor=(.5, 1.07))
-  wins = sum(1 for n in names
-             if med[who[0]][n] >= max(med[w][n] for w in who if has(w, n)))
   # An arm can be missing from every set shown -- a corpus grows
   # faster than a slow arm can be run over it -- so name it and move
   # on rather than take the figure down.
   def avg(w,    v=None):
     v = [med[w][n] for n in names if has(w, n)]
-    return ("{} {:.3g}{}".format(Look[w][3], st.fmean(v),
+    # .3f, not .3g: a mean that lands on 0.810 must not print as
+    # 0.81 beside 0.893, or the eye reads a shorter number as a
+    # coarser measurement.
+    return ("{} {:.3f}{}".format(short(w), st.fmean(v),
               "" if len(v) == len(names) else f" (on {len(v)})")
-            if v else "{} n/a".format(Look[w][3]))
-  ax.text(0, 1.015, "mean over sets:   " + "      ".join(avg(w) for w in who)
-          + "      {} best on {} of {}".format(
-              Look[who[0]][3], wins, len(names)),
+            if v else "{} n/a".format(short(w)))
+  # The means only.  A "best on N of M" tally used to sit here, and
+  # it answered a question nobody was asking: with five arms inside
+  # a few thousandths of each other on most sets, a count of outright
+  # wins is decided by noise, not by which arm ranks better.  The
+  # pooled-sd strip below already says how much of any gap is real.
+  ax.text(0, 1.015, "mean over sets:   " + "      ".join(avg(w) for w in who),
           transform=ax.transAxes, ha="left", va="bottom", fontsize=10.5,
           color="#333333")
   sds = [pooled(n) for n in names]
@@ -616,7 +758,7 @@ def auc():
   sx.set_xticklabels(names)
   sx.tick_params(axis="x", labelsize=6.5, rotation=90)
   sx.set_xlabel(f"{len(names)} moot/classify sets,"
-                " sorted by the gap to TabICL inside each group" + note,
+                + f" sorted by {kname} inside each group" + note,
                 fontsize=11, labelpad=12)
   # pad clears the legend, which sits above the axes, not inside it.
   ax.set_title("TabICL leads; tab's deep forest now matches LightGBM\n"
@@ -704,8 +846,8 @@ def panels(name, who, vs, title, lead):
                len(names), Short[base], Short[vs], len(tie)),
            transform=a.transAxes, ha="left", va="bottom", fontsize=9.5,
            color="#333333")
-    for lo, hi, g in zip([0] + edge, edge + [len(names)],
-                         ("2 klasses", "3-5 klasses", "6+ klasses")):
+    for lo, hi in zip([0] + edge, edge + [len(names)]):
+      g = Band[grp(names[lo])]
       if hi > lo:
         a.text((lo + hi - 1) / 2, at, "{}  (n={})".format(g, hi - lo),
                transform=a.get_xaxis_transform(), ha="center",
@@ -795,32 +937,55 @@ def pdpf():
   """
   fam = [("nb",       "one model"),
          ("treedeep", "one model"),
+         ("fft",      "one model"),
          ("lgbm",     "many models"),
          ("hardeep",  "many models"),
+         ("hardhist", "many models"),
+         ("rnb",      "many models"),
          ("tabicl",   "neural")]
   who = [w for w, _ in fam if glob.glob(f"{Cache}/classify/*/{w}.csv")]
   S   = sets("classify", who)
   cols = [("pd", "pd %   (higher better)"), ("pf", "pf %   (lower better)")]
   med = {(w, c): {n: st.fmean(v) for n, d in S if (v := cells(d, w, c))}
          for w in who for c, _ in cols}
+  lab = dict(Look)
+  lab["nb"] = Look["nb72"]              # ,/run writes nb at bins=7
   keep = [(n, d) for n, d in S
           if all(n in med[(w, c)] for w in who for c, _ in cols)]
   print(f"  pdpf: kept {len(keep)} of {len(S)}")
   grp = {n: (0 if klasses(n) == 2 else 1 if klasses(n) <= 5 else 2)
          for n, _ in keep}
-  # Sorted on the MEAN pd of the arms shown, not on one arm's pd: a
-  # key taken from a single arm draws that arm as a smooth curve and
-  # every rival as noise around it, which is a property of the sort,
-  # not a result.
-  avgpd = {n: st.fmean([med[(w, "pd")][n] for w in who]) for n, _ in keep}
-  keep.sort(key=lambda nd: (grp[nd[0]], avgpd[nd[0]]))
+  # Sorted inside each band on one arm's pd, ascending: the left of a
+  # band is where that arm struggles, the right where the set is easy
+  # for it.  Read that way the other four are a spread around a
+  # rising reference line, and a set where a cheap arm matches an
+  # expensive one shows up as a crossing.
+  #
+  # The cost of a single-arm key: it draws that arm smooth and every
+  # rival as noise about it, and the smoothness is a property of the
+  # sort, not a result.  So the arm sorted on is named on the x axis,
+  # and SORTBY=mean restores the mean-pd key, which spends no arm's
+  # shape to buy the reference line.
+  Sortby = os.getenv("SORTBY", "hardeep")
+  if Sortby == "mean" or Sortby not in who:
+    key = {n: st.fmean([med[(w, "pd")][n] for w in who]) for n, _ in keep}
+    kname = "mean pd"
+  else:
+    key, kname = med[(Sortby, "pd")], f"{lab[Sortby][3]}'s pd"
+  keep.sort(key=lambda nd: (grp[nd[0]], key[nd[0]]))
   names = [n for n, _ in keep]
   edge  = [j for j in range(1, len(names))
            if grp[names[j]] != grp[names[j - 1]]]
-  lab = dict(Look)
-  lab["nb"] = Look["nb72"]              # ,/run writes nb at bins=7
   f, ax = plt.subplots(2, 1, figsize=(13, 8), dpi=200, sharex=True,
                        gridspec_kw=dict(hspace=.10))
+  # Grey column: the new forest and TabICL land within 5 points here.
+  # Both panels get the same columns, so a set that agrees on pd and
+  # not on pf is visible as a column with one line apart in it.
+  Near = ("tabicl", "hardhist")
+  shade = {}
+  if all(w in who for w in Near):
+    for k, (c, _) in enumerate(cols):
+      shade[c] = agree(ax[k], names, med[(Near[0], c)], med[(Near[1], c)], 5)
   for k, (c, ylab) in enumerate(cols):
     a = ax[k]
     a.spines[["top", "right"]].set_visible(False)
@@ -830,32 +995,43 @@ def pdpf():
       col, ls, mk, _ = lab[w]
       a.plot(range(len(names)), [med[(w, c)][n] for n in names], ls,
              color=col, marker=mk, ms=3.5, lw=1.5,
-             label="{}  [{}]".format(lab[w][3],
-                                     dict(fam)[w]), zorder=3)
+             label="{}: {}  [{}]".format(short(w), lab[w][3],
+                                         dict(fam)[w]), zorder=3)
     a.set_ylim(0, 100)
+    dashes(a, 5)                   # every 5%, unlabelled
     a.set_ylabel(ylab, fontsize=11)
+    if c in shade:
+      a.text(1, 1.012, "grey: {} of {} sets within 5 of {}".format(
+               len(shade[c]), len(names), short(Near[0])),
+             transform=a.transAxes, ha="right", va="bottom",
+             fontsize=9, color="#777777")
     a.text(0, 1.012, "mean over sets:   " + "      ".join(
-             "{} {:.1f}".format(lab[w][3], st.fmean(
+             "{} {:.1f}".format(short(w), st.fmean(
                [med[(w, c)][n] for n in names])) for w in who),
            transform=a.transAxes, ha="left", va="bottom",
            fontsize=10.5, color="#333333")
-  for lo, hi, t in zip([0] + edge, edge + [len(names)],
-                       ("2 klasses", "3-5 klasses", "6+ klasses")):
+  for lo, hi in zip([0] + edge, edge + [len(names)]):
+    t = Band[grp[names[lo]]]
     if hi > lo:
       ax[0].text((lo + hi - 1) / 2, .02, f"{t}  (n={hi - lo})",
                  transform=ax[0].get_xaxis_transform(), ha="center",
                  va="bottom", fontsize=9, color="#555555")
+  # The legend sits above the panel, so the title has to be pushed
+  # clear of however many rows it wraps to.  A fixed pad was right
+  # for five arms and let a seventh arm's third row land on top of
+  # the title.
+  nrow = -(-len(who) // 3)
   ax[0].legend(frameon=False, fontsize=10, ncol=3,
                loc="lower center", bbox_to_anchor=(.5, 1.10))
   ax[1].set_xticks(range(len(names)))
   ax[1].set_xticklabels(names)
   ax[1].tick_params(axis="x", labelsize=6.5, rotation=90)
   ax[1].set_xlabel(f"{len(names)} moot/classify sets, both panels in one"
-                   " order: by mean pd inside each klass group",
+                   f" order: by {kname} inside each klass group",
                    fontsize=11, labelpad=12)
   ax[0].set_title("pd and pf at the threshold, where auc will not say\n"
                   "(each point is one set's mean over 20 random 80:20"
-                  " splits)", fontsize=13, pad=58)
+                  " splits)", fontsize=13, pad=28 + 15 * nrow)
   f.savefig(f"{Docs}/pdpf.png", bbox_inches="tight"); plt.close(f)
   print(f"{Docs}/pdpf.png")
 
@@ -863,5 +1039,6 @@ if __name__ == "__main__":
   extra = {"optlabels": lambda: labels("optimize", "optlabels", vs="tabicl"),
            "opt":       lambda: top5("optimize", "opt")}
   jobs = sys.argv[1:] or ["clas", "labels", "top5", "optlabels", "opt",
-                          "secs", "cost", "raw", "auc", "pdpf", "tree", "arms"]
+                          "secs", "cost", "raw", "rawclas", "auc", "pdpf",
+                          "tree", "arms"]
   for j in jobs: (extra.get(j) or globals()[j])()

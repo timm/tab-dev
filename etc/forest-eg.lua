@@ -26,6 +26,11 @@ flags:
 ]]
 for k, v in usage:gmatch"\n%s+(%a+)=(%S+)" do the[k] = values(v)[1] end
 
+-- `reps` is 20 in tab-eg, which makes the expensive sets untestable:
+-- one run of nomao is 44 minutes.  Timing needs fewer; scoring still
+-- wants all 20, so this is an override, not a new default.
+reps = tonumber(os.getenv("REPS")) or reps
+
 -- The knobs ens.py sets around its fit, set here instead of trusted
 -- to the defaults: an arm that reads its depth from whatever the
 -- library last shipped is not a comparison, it is a coincidence.
