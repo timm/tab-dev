@@ -616,7 +616,11 @@ def rawclas():
     # Each curve's own n beside its total: a slow arm that ran on
     # fewer sets can show the smaller total and still be the dearer
     # learner.  These are five corpora, not five columns.
-    a.plot(range(1, len(xs) + 1), xs, "-", color=lab[w][0], lw=2.2,
+    # Take the linestyle from Look, do not hardcode "-": `nb` and
+    # `treedeep` are both black, and drawn solid they are one curve
+    # with two labels.  Dashed-vs-solid is what tells them apart in
+    # auc.png and pdpf.png, so it has to mean the same thing here.
+    a.plot(range(1, len(xs) + 1), xs, lab[w][1], color=lab[w][0], lw=2.2,
            zorder=3, label="{}: {}   {} sets, total {:,.0f}s".format(
              short(w), lab[w][3], len(xs), sum(xs)))
   a.set_yscale("log")
