@@ -6,7 +6,7 @@ the ones in min.lua, so this sees the rows the lua learners saw.
 
 usage: python3 ,/lgbm.py f.csv        (writes <cache>/<set>/lgbm.csv)
 """
-import os, sys, time
+import os, sys, time, math
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import min as M
 from score import Acc, Auc, aucs, macro
@@ -56,6 +56,18 @@ def rank(want, got, check=5):
     if v == best: return 100 * n / max(1, len(ys) - 1)
   return 100
 
+def win(want, got, check=5):
+  """How much of the gap it closed: 100 = the best row, 0 = an average
+  one.  `rank` counts how many rows beat us and saturates where many
+  rows sit a hair apart; this counts the y given up instead.  Must
+  match `gap` in tab-eg.lua, floor included, or the arms do not
+  compare."""
+  order = sorted(range(len(got)), key=lambda j: got[j])
+  best  = min(want[j] for j in order[:check])
+  lo, mu = min(want), sum(want) / len(want)
+  if mu == lo: return 100
+  return int(math.floor(100 * (1 - (best - lo) / (mu - lo))))
+
 def klassOf(t, file):
   "Classify sets guess the last ! column, if it is discrete."
   if "/classify/" not in file: return None
@@ -68,7 +80,13 @@ Jobs = ({"n_jobs": int(os.environ["LGBM_JOBS"])}
 
 def main(file):
   "Score LightGBM on every rep, unless that was already done."
-  who = "lgbmauc" if os.getenv("AUC") else "lgbm"
+  # LABELS=n trains on the FIRST n training rows instead of all of
+  # them.  `pair` here and `pair` in tab.lua share a seed and a
+  # Park-Miller shuffle, so those n rows are the very same rows tab's
+  # `head1(tr.rows, the.budget - the.check)` hands its own learners:
+  # the arms differ by learner alone, not by which labels they saw.
+  lab = int(os.getenv("LABELS", 0))
+  who = ("lgbmauc" if os.getenv("AUC") else "lgbm") + (f"{lab}" if lab else "")
   out = f"{home(file)}/{who}.csv"
   if os.path.exists(out) and not os.getenv("FORCE"): print(out); return
   os.makedirs(home(file), exist_ok=True)
@@ -79,6 +97,7 @@ def main(file):
   lines = []
   for s in range(1, Reps + 1):
     tr, te = pair(t, s)
+    if lab: tr = M.clone(t, tr.rows[:lab])
     i      = {}
     X1, y1 = xy(tr, i, klass, file)
     X2, y2 = xy(te, i, klass, file)
@@ -95,13 +114,13 @@ def main(file):
     else:
       got  = list(model.predict(X2))
       line = (macro(y2, got) if klass else
-              f"{rank(y2, got):.3f},"
+              f"{rank(y2, got):.3f},{win(y2, got)},"
               f"{sum(abs(a-b) for a,b in zip(y2,got))/len(y2):.6g}")
     secs   = time.time() - t0
     lines.append(f"{s},{secs:.4f},{line}")
   with open(out, "w") as f:
     f.write("rep,secs," + (Auc if who == "lgbmauc" else
-                           Acc if klass else "rank,mae") + "\n")
+                           Acc if klass else "rank,win,mae") + "\n")
     f.write("\n".join(lines) + "\n")
   print(out)
 

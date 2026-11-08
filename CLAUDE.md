@@ -67,13 +67,24 @@ sets, macro-averaged pd/pf/d2h):
 |---|---|
 | info-gain column weighting | -4 to -6 accuracy |
 | AODE | worse on the macro metrics -- but see the contradiction below |
-| per-cluster naive Bayes | 51 of 69 sets identical |
+| per-cluster naive Bayes | 51 of 69 sets identical -- UNVERIFIED, see below |
 | MDL (Fayyad-Irani) discretization | -4.1 |
 | bottom-up entropy merging | statistical tie |
 | kNN, four sampling schemes | worse everywhere, 12.6x slower |
 
 What survived: binning test rows on **training** statistics (+2.5), and
 `bins=10 m=0.5` (+1.6, and small enough to be overfitting).
+
+**The per-cluster row does not say identical to WHAT.** It arrived in
+the Oct 28 bulk import with no commit message, no surviving rig (`grep
+-i cluster` over every `.lua`/`.py`/`.yue` finds only `etc/charts.py`
+and `attic/jiffy*`, none of them this experiment) and no cache arm --
+`treenb` is naive Bayes at tree LEAVES, which is a different thing.
+Under this table's heading the reading has to be "identical to plain
+`nb`", i.e. clustering first and fitting per cluster changed no
+prediction; that is a reconstruction from context, not a record.  The
+69-set corpus also predates CC18's 116.  Do not cite this to rule an
+experiment out: re-run it, or leave it alone.
 
 The ceiling: naive Bayes ~80.1 mean accuracy, LightGBM 82.8, TabICL
 86.6. A real gain means beating the booster, not tuning the Bayes.

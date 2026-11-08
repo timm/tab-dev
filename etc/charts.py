@@ -7,7 +7,7 @@ by being run, not by being coded here.
 
 usage: python3 ,/charts.py [clas|labels|top5|secs ...]   (all, if none)
 """
-import os, sys, glob, statistics as st
+import os, sys, glob, json, statistics as st
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import min as M
 from math import log, exp
@@ -25,6 +25,19 @@ Look = {
   "nb":        ("#000000", "--", "o", "naive Bayes (self-tuned)"),
   "rmeans":    ("#a6cee3", "-",  "o", "rmeans, 45 labels"),
   "rmeansall": ("#1f5f9e", "-",  "o", "rmeans, every row"),
+  # Same 45-label budget as `rmeans`, spent on rows `acquire` chose:
+  # near the best labelled rows, far from the rest.  It has no y
+  # model, so it appears only where the score is an ORDER (top5),
+  # never on mae or SA.
+  "lgbm45":    ("#d4663a", ":",  "o", "LightGBM, 45 labels"),
+  "acq":       ("#2a9d3f", "-",  "D", "acquire, 45 labels"),
+  # The classification forest, read at the leaf instead of voted on:
+  # a leaf answers with the mean y of the rows that reached it, so a
+  # continuous goal gets a near-continuous score without any
+  # regression tree.  Splits are still tab's entropy cut, on a
+  # "better half of what we labelled" klass.
+  "fornum45":  ("#8c6d1f", "-",  "v", "forest(30), 45 labels"),
+  "fornumall": ("#5a3fc0", "-",  "^", "forest(30), every row"),
   "nb50":      ("#1f5f9e", "--", "D", "naive Bayes, 50 labels"),
   "nb72":      ("#000000", "--", "o", "naive Bayes (bins=7, m=2)"),
   "lgbm":      ("#e9622e", "-",  "o", "LightGBM"),
@@ -71,7 +84,9 @@ Short = {"nb": "bayes", "nb72": "bayes", "treedeep": "1tree",
          "hardeep": "30tree", "lgbm": "lgbm", "tabicl": "tabicl",
          "tabpfn": "tabpfn", "treemaj": "1tree", "treenb": "1tree+nb",
          "fordeep": "30tree", "for60": "60tree", "rmeans": "rmeans",
-         "rmeansall": "rmeans-all", "fft": "fft", "rnb": "rnb",
+         "rmeansall": "rmeans-all", "acq": "acquire", "lgbm45": "lgbm45", "fornum45": "forest45",
+         "fornumall": "forest-all", "fft": "fft",
+         "rnb": "rnb",
          "hardbin": "30tree/bin", "hardhist": "30tree"}
 
 def short(w):
@@ -90,11 +105,24 @@ def pooledsd(d, a, b, col):
   return ((((len(u)-1) * st.pstdev(u)**2 + (len(v)-1) * st.pstdev(v)**2)
            / (len(u) + len(v) - 2)) ** .5)
 
-def sdstrip(sx, names, sds, lab, unit="{:.3f}"):
-  "Draw one pooled-sd strip under a panel."
-  sx.bar(range(len(names)), [x or 0 for x in sds], width=.62,
+def sdstrip(sx, names, sds, lab, unit="{:.3f}", cap=None):
+  """Draw one pooled-sd strip under a panel.
+
+  `cap` puts a ceiling on the strip's own y.  One pathological set --
+  a corpus almost always has one -- can carry an sd twenty times the
+  median, and scaled to that every other bar is a line on the floor:
+  a strip that cannot be read is not a check.  Capped bars are marked
+  with a caret and the caption still names the true max and its set.
+  """
+  ok0 = [x for x in sds if x]
+  hi  = max(ok0 or [1])
+  if cap: hi = min(hi, cap)
+  sx.bar(range(len(names)), [min(x or 0, hi) for x in sds], width=.62,
          color="#9aa5ad", lw=0, zorder=2)
-  hi = max([x for x in sds if x] or [1])
+  for j, x in enumerate(sds):
+    if x and x > hi:
+      sx.text(j, hi, "^", ha="center", va="bottom", fontsize=7,
+              color="#555555", zorder=4)
   sx.set_ylim(0, hi * 1.15)
   sx.set_ylabel("pooled sd", fontsize=8)
   sx.tick_params(axis="y", labelsize=7)
@@ -253,6 +281,28 @@ def sets(kind, need):
       out.append((os.path.basename(d), d))
   return out
 
+# How many sets the runtime figures measure.  Serial seconds are the
+# only honest ones -- eight arms on eight cores time each other, not
+# the learner -- and a serial pass over a whole corpus is hours, so
+# the cost figures run on a sample instead.
+Sample = int(os.getenv("SAMPLE", 20))
+
+def sample(kind, need, k=None):
+  """`Sample` sets of KIND holding all of NEED, across the size range.
+
+  Sorted by rows and then stepped, never drawn at random: the sample
+  has to span small-to-large rather than clump at whatever size is
+  most common, and it has to be the SAME sample on every redraw or
+  two drawings of one figure are two different corpora.  Ties broken
+  on the name so the order does not depend on glob order.
+  """
+  k = k or Sample
+  S = sets(kind, need)
+  S.sort(key=lambda nd: (rows(nd[0], kind), nd[0]))
+  if len(S) <= k: return S
+  step = len(S) / k
+  return [S[min(len(S) - 1, int(i * step))] for i in range(k)]
+
 def rows(name, kind):
   "How many rows that set's csv holds."
   f = glob.glob(f"{Moot}/{kind}/{name}.csv") + \
@@ -276,13 +326,25 @@ def fig(w=13, h=6):
   ax.grid(axis="y", color="#eeeeee", zorder=0)
   return f, ax
 
-def save(f, ax, name, title, xlab, ylab, rot=90, size=7):
-  ax.set_title(title, fontsize=13, pad=18)
-  ax.set_xlabel(xlab, fontsize=11, labelpad=12)
+def save(f, ax, name, title, xlab, ylab, rot=90, size=7, xax=None,
+         pad=18, tight=True):
+  # `xax`: the axes that owns the x axis, when it is not `ax`.  With
+  # sharex, matplotlib shows the tick labels on the LAST axes only, so
+  # a figure with a strip under it must hang its names and its xlabel
+  # down there or they are drawn and then hidden.
+  xax = xax if xax is not None else ax
+  ax.set_title(title, fontsize=13, pad=pad)
+  xax.set_xlabel(xlab, fontsize=11, labelpad=12)
   ax.set_ylabel(ylab, fontsize=11)
-  ax.tick_params(axis="x", labelsize=size, rotation=rot)
-  f.tight_layout()
-  f.savefig(f"{Docs}/{name}.png")
+  xax.tick_params(axis="x", labelsize=size, rotation=rot)
+  # A figure whose panels came from a gridspec with a set hspace is
+  # not tight_layout's to re-space; it says so and then guesses.
+  if tight: f.tight_layout()
+  # bbox_inches="tight", as the other figures use.  Without it a long
+  # two-line y label runs off the top of the canvas and is cropped --
+  # text that leaves the canvas is not a styling problem, it is a
+  # label the reader cannot read.
+  f.savefig(f"{Docs}/{name}.png", bbox_inches="tight")
   plt.close(f)
   print(f"{Docs}/{name}.png")
 
@@ -418,12 +480,62 @@ def gain():
   f.savefig(f"{Docs}/gain.png", bbox_inches="tight"); plt.close(f)
   print(f"{Docs}/gain.png")
 
-def labels(kind="regression", name="labels", vs="lgbm"):
+# ---- Shepperd & MacDonell 2012: standardised accuracy ----------------
+# SA = 1 - MAR(arm) / MAR(P0), where P0 is random guessing: predict each
+# test row by drawing another actual at random.  SA = 0 is "no better
+# than guessing", negative is worse than guessing, 1 is perfect.  It is
+# unitless, so moot/regression in dollars and moot/optimize in d2h can
+# be read on one axis without rescoring either.
+#
+# MAR(P0) needs no learner and no Monte Carlo: the expectation over
+# random draws is exactly the Gini mean difference of the actuals, and
+# the test rows are a function of the seed.  `etc/marp0.json` holds one
+# list of 20 per-rep values per set, built by scratch/sa.py.
+_Marp0 = None
+
+def marp0(kind, name):
+  "The 20 per-rep random-guessing MARs for this set, or None."
+  global _Marp0
+  if _Marp0 is None:
+    f = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                     "marp0.json")
+    _Marp0 = json.load(open(f)) if os.path.exists(f) else {}
+  return _Marp0.get(f"{kind}/{name}")
+
+def sas(dir, who, kind, name):
+  """SA per rep -- one value per seed -- or None if the baseline is out.
+
+  Per rep, not on the medians: MAR(P0) moves with the split, so
+  dividing one summary by another would mix reps that never met.
+  Kept as a list because the sd strip needs the spread, and a pooled
+  sd taken on mae would be in mae units -- the very units SA exists
+  to leave behind, and not the units of the gap drawn above it.
+  """
+  v = cells(dir, who, "mae")
+  b = marp0(kind, name)
+  if not v or not b: return None
+  return [1 - a / c for a, c in zip(v, b) if c] or None
+
+def sa(dir, who, kind, name):
+  "Median SA over the reps."
+  u = sas(dir, who, kind, name)
+  return st.median(u) if u else None
+
+def labels(kind="regression", name="labels", vs="lgbm", logy=None,
+           stdacc=False):
   "Raw MAE on moot/regression: 45 labels against everyone's all."
-  who = ranarms(["rmeans", "rmeansall", "lgbm"])
+  # No `acq` here: it ranks without estimating y, so it has no mae
+  # and no SA.  The forest arms do predict y, so they belong.
+  who = ranarms(["rmeans", "rmeansall", "fornum45", "fornumall",
+                 "lgbm"])
   S   = sets(kind, ["rmeans", "rmeansall", "lgbm"])
-  med = {w: {n: st.median(cells(d, w, "mae") or [float("nan")])
-             for n, d in S} for w in who}
+  # SA, or raw mae.  SA is unitless, so on that axis a regression set
+  # in dollars sits beside an optimize set in d2h and the two mean the
+  # same thing; raw mae cannot cross that line at any scaling.
+  med = ({w: {n: (sa(d, w, kind, n) or float("nan")) for n, d in S}
+          for w in who} if stdacc else
+         {w: {n: st.median(cells(d, w, "mae") or [float("nan")])
+              for n, d in S} for w in who})
   # Grey marks "no real difference from rmeans on 45 labels".  Against
   # lgbm that is the three effect-size tests; against anything else it
   # is MaeNear, in raw mae units.  Mind that mae spans six orders of
@@ -434,44 +546,211 @@ def labels(kind="regression", name="labels", vs="lgbm"):
     if not a or not b: return False
     if vs == "lgbm":   return M.same(a, b)
     return abs(st.median(a) - st.median(b)) <= MaeNear
+  if logy is None: logy = kind != "optimize"
   tie = {n: near(d) for n, d in S}
-  S.sort(key=lambda nd: med["rmeansall"][nd[0]] - med["lgbm"][nd[0]])
+  # Sort on one arm's own mae, ascending.  SORTBY picks which; the
+  # default is LightGBM, which is the only arm here that ran on every
+  # set of both corpora -- so the x order is defined everywhere, and
+  # no block of sets lands at one end merely for having no sort key.
+  # An arm that did decline a set still has no value to sort on, so
+  # those go right rather than wherever NaN happens to fall.
+  Sortby = os.getenv("SORTBY", "lgbm")
+  if Sortby not in med or not any(v == v for v in med[Sortby].values()):
+    Sortby = "rmeans"
+  flip = -1 if stdacc else 1          # SA: higher is better
+  S.sort(key=lambda nd: (med[Sortby][nd[0]] != med[Sortby][nd[0]],
+                         flip * med[Sortby][nd[0]]))
   names = [n for n, _ in S]
-  f, ax = fig(13, 6)
+  dirof = dict(S)
+  # On SA the figure grows a pooled-sd strip: the gap between two lines
+  # is only a result if it clears the spread the reps already show, and
+  # SA per rep gives that spread in the axis's own units.
+  if stdacc:
+    f, (ax, sx) = plt.subplots(2, 1, figsize=(13, 6.6), dpi=200,
+                               sharex=True,
+                               gridspec_kw=dict(height_ratios=[4, 1],
+                                                hspace=.08))
+    for a in (ax, sx):
+      a.spines[["top", "right"]].set_visible(False)
+      a.grid(axis="y", color="#eeeeee", zorder=0)
+  else:
+    f, ax = fig(13, 6)
+    sx = None
+  xa = sx if sx is not None else ax
   for j, n in enumerate(names):
-    if tie[n]: ax.axvspan(j - .5, j + .5, color="#e8e8e8", zorder=0)
+    if tie[n]:
+      for a in (ax, sx) if sx is not None else (ax,):
+        a.axvspan(j - .5, j + .5, color="#e8e8e8", zorder=0)
   for w in who:
     ys = [med[w][n] for n in names]
     if not any(y == y for y in ys): continue   # not run yet: no legend line
     c, ls, mk, lab = Look[w]
     ax.plot(range(len(names)), ys, ls, color=c, marker=mk, ms=2.5, lw=1.6,
             label=lab, zorder=3)
-  ax.set_yscale("log")
-  ax.set_xticks(range(len(names)))
-  ax.set_xticklabels([f"{n} ({int(.8*rows(n,kind))})"
+  # Log only where the y really spans decades.  moot/regression is raw
+  # y -- mae runs from 0.0003 on `ailerons` to 10^5 on `cal.housing`,
+  # six orders, and linear there is one flat line on the floor.
+  # moot/optimize scores ydist, which is normalised to 0..1, so every
+  # set lands in the same decade and the log axis only pushes the
+  # differences the figure exists to show into a hairline.
+  note = ""
+  if stdacc:
+    # 0..1, the whole of the range SA is defined on when an arm beats
+    # guessing at all.  0 is random guessing and lands on the spine,
+    # so it is drawn as the floor rather than as a line in free space.
+    # No landmark line at 0: on a 0..1 axis the floor IS the landmark,
+    # and a dashed rule laid along the spine reads as part of the frame
+    # while costing a legend entry that pushes the legend onto a second
+    # row and the second row onto the title.  The y label carries it.
+    ax.set_ylim(0, 1)
+    # An arm worse than guessing now falls off the bottom.  Naming the
+    # points is the whole of the cost: a clipped point the caption does
+    # not account for is a point the reader cannot know was dropped.
+    low = sorted((med[w][n], Look[w][3], n) for w in who for n in names
+                 if med[w][n] == med[w][n] and med[w][n] < 0)
+    if low:
+      note = ("\nthe axis starts at 0; worse than guessing, off scale:  "
+              + ";  ".join(f"{lab} {n} {v:+.2f}" for v, lab, n in low))
+  elif logy: ax.set_yscale("log")
+  xa.set_xticks(range(len(names)))
+  xa.set_xticklabels([f"{n} ({int(.8*rows(n,kind))})"
                       for n in names])
-  for t, n in zip(ax.get_xticklabels(), names):
+  for t, n in zip(xa.get_xticklabels(), names):
     if tie[n]: t.set_color("#999999")
-  mark(ax, names)
+  mark(xa, names)
   ax.plot([], [], lw=8, color="#e8e8e8",
           label="45 labels == LightGBM (cohen, cliffs, ks)" if vs == "lgbm"
           else f"45 labels within {MaeNear:g} mae of {Look[vs][3]}")
-  ax.legend(frameon=False, fontsize=10, loc="upper left")
-  save(f, ax, name, "rmeans on 45 labels vs every row of the 80%"
-       " split, against LightGBM",
+  # Above the axes on SA, not inside it: the lines run the full height
+  # of a 0..1 panel and a box in any corner sits on top of data.
+  if stdacc:
+    ax.legend(frameon=False, fontsize=9.5 if len(who) < 5 else 8,
+              ncol=len(who) + 1,
+              loc="lower center", bbox_to_anchor=(.5, 1.0))
+  else:
+    ax.legend(frameon=False, fontsize=10, loc="upper left")
+  if sx is not None:
+    # The pair the grey columns already test, so the strip answers the
+    # question the shading raises: is that gap bigger than the noise?
+    def pooled(n,    u=None, v=None):
+      u = sas(dirof[n], "rmeans", kind, n)
+      v = sas(dirof[n], vs, kind, n)
+      if not u or not v: return None
+      return ((((len(u)-1) * st.pstdev(u)**2
+                + (len(v)-1) * st.pstdev(v)**2)
+               / (len(u) + len(v) - 2)) ** .5)
+    sds = [pooled(n) for n in names]
+    if any(sds):
+      okd = [x for x in sds if x]
+      sdstrip(sx, names, sds,
+              f"of {Look['rmeans'][3]} and {Look[vs][3]}, in SA",
+              cap=4 * st.median(okd))
+  save(f, ax, name,
+       ("Standardised accuracy: how far past random guessing?"
+        f"   [moot/{kind}]") if stdacc else
+       "rmeans on 45 labels vs every row of the 80% split,"
+       " against LightGBM",
        f"{len(names)} moot/{kind} sets (training rows available),"
-       " sorted by rmeans(all) - lgbm",
-       "raw MAE, median of 20 seeds  (log)")
+       f" sorted by {Look[Sortby][3]}" + note,
+       "SA = 1 - MAR(arm) / MAR(random guess)\n"
+       "(1 = perfect, 0 = no better than guessing)" if stdacc else
+       "raw MAE, median of 20 seeds" + ("  (log)" if logy else ""),
+       xax=sx, pad=30 if stdacc else 18, tight=sx is None)
+
+def profile(kind="optimize", name="prof", col="rank"):
+  """Each arm's own values, sorted: a performance profile.
+
+  `top5` draws one x position per set, so five lines cross each other
+  on every set the arms disagree about -- measured, 6 to 8 times more
+  ink than the data needs.  Sorting each arm separately throws away
+  which set is which and keeps the only thing the claim rests on: how
+  often each arm lands inside 5%.  That is where a curve crosses the
+  green line, read off the x axis.
+  """
+  who = ranarms(["rmeans", "rmeansall", "acq", "fornum45",
+                 "fornumall", "lgbm45", "lgbm"])
+  S   = sets(kind, ["rmeans", "rmeansall"])
+  med = {w: {n: (lambda v: st.median(v) if v else float("nan"))(
+               cells(d, w, col)) for n, d in S} for w in who}
+  f, ax = fig(9, 5.6)
+  # `rank` is a percentile and small is good; `win` is a percent of
+  # the gap to an average row closed, and big is good.  So `win`
+  # sorts the other way, shades the other side of its line, and
+  # counts the sets ABOVE it.
+  up   = col == "win"
+  line = float(os.getenv("WINLINE", 90)) if up else 5
+  cap  = float(os.getenv("TOP5CAP", 20))
+  ax.axhspan(line, 100, color="#eef4ee", zorder=0) if up else \
+    ax.axhspan(0, line, color="#eef4ee", zorder=0)
+  ax.axhline(line, color="#2d7a2d", ls="--", lw=1.2, zorder=2,
+             label=f"the {line:.0f}% line")
+  for w in who:
+    v = sorted((x for x in med[w].values() if x == x), reverse=up)
+    if len(v) < 2: continue
+    xs = [100 * j / (len(v) - 1) for j in range(len(v))]
+    c, ls, mk, lab = Look[w]
+    good = sum(1 for y in v if (y >= line if up else y <= line))
+    ax.plot(xs, v, ls, color=c, lw=2, zorder=3,
+            label="{}  ({}/{} {} {:.0f}%)".format(
+              lab, good, len(v), "over" if up else "inside", line))
+  ax.set_ylim((0, 100) if up else (0, cap))
+  ax.set_xlim(0, 100)
+  ax.legend(frameon=False, fontsize=10, loc="upper left")
+  save(f, ax, name,
+       "How often does an arm's top 5 hold a good row?"
+       f"   [moot/{kind}]",
+       "percent of data sets, each arm sorted on its own result",
+       ("how much of the gap an average row leaves we closed\n"
+        "(100 = we found the very best row, 0 = no better than average)"
+        if up else
+        "best of our top 5, as a percentile of the test set\n"
+        "(0 = we found the very best row)"), rot=0, size=10)
 
 def top5(kind="regression", name="top5"):
   "Label only each arm's top 5: how good is the best of those?"
-  who = ranarms(["rmeans", "rmeansall", "lgbm"])
+  # `acq` rides in the need list, not the complete-case gate: it is
+  # the newest arm, so gating on it would shrink the corpus to
+  # whatever it has reached.  A set it has not run lands as NaN and
+  # the line simply breaks there.
+  who = ranarms(["rmeans", "rmeansall", "acq", "fornum45",
+                 "fornumall", "lgbm45", "lgbm"])
   S   = sets(kind, ["rmeans", "rmeansall"])
   med = {w: {n: (lambda v: st.median(v) if v else float("nan"))(
                  cells(d, w, "rank")) for n, d in S} for w in who}
-  S.sort(key=lambda nd: med["rmeans"][nd[0]])
+  # Same sort key as labels(): SORTBY, defaulting to LightGBM.  The two
+  # figures are read side by side, and a reader who has learnt the x
+  # order on one should not have to learn a second one here.  An arm
+  # with no result on a set has no key, so those sets go right rather
+  # than wherever NaN happens to fall.
+  # SORTBY may also name a summary ACROSS the arms rather than one of
+  # them.  Measured over every candidate, `max` is the quietest
+  # arm-neutral key on both corpora -- a set moves right when any arm
+  # struggles on it -- and sorting on one arm, LightGBM above all,
+  # scrambles the other three: its rank ties at 0 on most sets, so it
+  # orders almost nothing and buys one flat line with everyone else's.
+  Across = {"max": max, "min": min, "mean": st.fmean,
+            "median": st.median}
+  Sortby = os.getenv("SORTBY", "lgbm")
+  if Sortby in Across:
+    f_ = Across[Sortby]
+    key = {n: (lambda u: f_(u) if u else float("nan"))(
+                [med[w][n] for w in who if med[w][n] == med[w][n]])
+           for n, _ in S}
+    sortlab = f"the {Sortby} over the arms"
+  else:
+    if Sortby not in med or not any(v == v
+                                    for v in med[Sortby].values()):
+      Sortby = "rmeans"
+    key, sortlab = med[Sortby], Look[Sortby][3]
+  S.sort(key=lambda nd: (key[nd[0]] != key[nd[0]], key[nd[0]]))
   names = [n for n, _ in S]
-  f, ax = fig(13, 6)
+  # Taller when the x names are long: tight_layout gives the names all
+  # the room they ask for and the axes whatever is left, so on
+  # moot/optimize -- 128 sets with names like
+  # `Medical_Data_and_Hospital_Readmissions` -- a 6in figure leaves an
+  # axes shorter than its own two-line y label, and the label is drawn
+  # off the top of the canvas.
+  f, ax = fig(13, 6 + max(len(n) for n in names) / 12)
   ax.axhspan(0, 5, color="#eef4ee", zorder=0)
   ax.axhline(5, color="#2d7a2d", ls="--", lw=1.2, zorder=2,
              label="the 5% line")
@@ -487,11 +766,23 @@ def top5(kind="regression", name="top5"):
   ax.set_xticklabels([f"{n} ({int(.2*rows(n,kind))})"
                       for n in names])
   mark(ax, names)
-  ax.set_ylim(bottom=0)
+  # One ceiling for both corpora.  `rank` is a percentile, so it means
+  # the same thing on one goal and on seven, and this is the only pair
+  # of figures here that can be read across the two -- which they
+  # cannot be if each picks its own y range.  TOP5CAP tunes it; a
+  # point above it is clipped, and the legend's "inside 5%" counts are
+  # computed before the clip, so nothing is lost from the numbers.
+  cap = float(os.getenv("TOP5CAP", 20))
+  gone = [(n, w) for w in who for n in names
+          if (v := med[w][n]) == v and v > cap]
+  if gone:
+    print(f"  {name}: {len(gone)} points clipped above {cap:g}: "
+          + " ".join(f"{n}/{short(w)}" for n, w in gone))
+  ax.set_ylim(0, cap)
   ax.legend(frameon=False, fontsize=10, loc="upper left")
   save(f, ax, name, f"Label only the top 5 of each ranking:"
        f" how good is the best one?   [moot/{kind}]",
-       "data sets (test rows), sorted by the 45-label result",
+       f"data sets (test rows), sorted by {sortlab}",
        "best of our top 5, as a percentile of the test set\n"
        "(0 = we found the very best row)")
 
@@ -603,7 +894,7 @@ def rawclas():
   """
   who = [w for w in ("nb", "treedeep", "hardhist", "lgbm", "tabicl")
          if glob.glob(f"{Cache}/classify/*/{w}.csv")]
-  S   = sets("classify", who)
+  S   = sample("classify", who)
   cur = {w: sorted(st.fmean(v) for _, d in S if (v := cells(d, w, "secs")))
          for w in who}
   lab = dict(Look); lab["nb"] = Look["nb72"]
@@ -638,7 +929,8 @@ def rawclas():
       a.text(1, y, t + " ", fontsize=8, color="#999999", va="bottom",
              ha="right", transform=a.get_yaxis_transform())
   a.legend(frameon=False, fontsize=9, loc="upper left")
-  a.set_xlabel(f"{len(S)} moot/classify sets, each curve sorted on its own",
+  a.set_xlabel(f"{len(S)} moot/classify sets (sampled across the size "
+               "range), each curve sorted on its own",
                fontsize=10, labelpad=10)
   a.set_ylabel("seconds for one fit and predict,\n"
                "mean of 20 seeds  (log)", fontsize=11)
@@ -1162,10 +1454,136 @@ def pdpf():
   f.savefig(f"{Docs}/pdpf.png", bbox_inches="tight"); plt.close(f)
   print(f"{Docs}/pdpf.png")
 
+def rawnum():
+  """One fit and predict in seconds, the three corpora side by side.
+
+  `raw` answers this for one tab arm per panel and is pinned.  This
+  one carries the whole current arm list instead, so the forest that
+  reads a leaf's mean y (`fornum45`, `fornumall`) can be priced
+  against the rmeans it is meant to beat and against LightGBM.  The
+  classify panel holds the SAME forest code voting on klasses, which
+  is the only honest ancestor to compare the other two panels with.
+  """
+  Panel = (("classify",   ["nb", "hardhist", "lgbm", "tabicl"]),
+           ("regression", ["rmeans", "rmeansall", "acq", "fornum45",
+                           "fornumall", "lgbm", "tabicl"]),
+           ("optimize",   ["rmeans", "rmeansall", "acq", "fornum45",
+                           "fornumall", "lgbm", "tabicl"]))
+  f, ax = plt.subplots(1, 3, figsize=(18, 6.4), dpi=200, sharey=True)
+  for k, (kind, who) in enumerate(Panel):
+    a, cur = ax[k], {w: [] for w in who}
+    S = sets(kind, ["lgbm"])
+    for name, d in S:
+      for w in who:
+        v = cells(d, w, "secs")
+        if v: cur[w].append(st.fmean(v))
+    a.spines[["top", "right"]].set_visible(False)
+    a.grid(axis="y", color="#eeeeee", zorder=0)
+    # Slowest first, so the legend reads in the same order as the
+    # curves stack.  An arm with no cached secs drops out silently.
+    live = [w for w in who if cur[w]]
+    live.sort(key=lambda w: st.median(cur[w]), reverse=True)
+    for w in live:
+      xs = sorted(cur[w])
+      c, ls, _, lab = Look[w]
+      # Each curve names its own n: a slow arm runs on fewer sets, so
+      # a smaller total can still be the dearer learner.
+      a.plot(range(1, len(xs) + 1), xs, ls, color=c, lw=2.2, zorder=3,
+             label=f"{lab}   {len(xs)} sets, total {sum(xs):,.0f}s")
+    a.set_yscale("log")
+    for y, t in ((1, "1 second"), (60, "1 minute")):
+      a.axhline(y, color="#cccccc", lw=1, zorder=1)
+      if k == 0: a.text(1, y, " " + t, fontsize=8, color="#999999",
+                        va="bottom")
+    a.legend(frameon=False, fontsize=8, loc="upper left")
+    a.set_title(f"moot/{kind}   ({len(S)} sets)", fontsize=11)
+    a.set_xlabel("sets, each curve sorted on its own", fontsize=10)
+  ax[0].set_ylabel("seconds for one fit and predict,\n"
+                   "mean of 20 seeds  (log)", fontsize=11)
+  f.suptitle("What one fit and predict costs, every arm", fontsize=13)
+  f.tight_layout()
+  f.savefig(f"{Docs}/rawnum.png", bbox_inches="tight"); plt.close(f)
+  print(f"{Docs}/rawnum.png")
+
+def rawall():
+  """One fit and predict, the three tasks side by side.
+
+  `rawclas` answers this for klass problems alone.  The same question
+  on regression and on optimization is a different corpus AND a
+  different arm list -- there is no forest to vote where there are no
+  klasses, and rmeans is not defined where there are -- so the three
+  cannot share a panel without an arm appearing to score zero on a
+  task it was never asked to do.  Three panels, one shared y axis,
+  one sample rule, so the heights can be read straight across.
+
+  Each curve is sorted on its own, as in `rawclas`: a cost curve
+  answers "what does this arm cost across a corpus", and pairing the
+  sets would answer a different question badly.
+  """
+  Panels = (("classify",   ("nb", "treedeep", "hardhist", "lgbm", "tabicl"),
+             "klass: pick one of k"),
+            ("regression", ("rmeans", "rmeansall", "lgbm", "tabicl"),
+             "one goal: predict y"),
+            ("optimize",   ("rmeans", "rmeansall", "lgbm", "tabicl"),
+             "many goals: predict ydist"))
+  lab = dict(Look); lab["nb"] = Look["nb72"]
+  f, ax = plt.subplots(1, 3, figsize=(16.5, 5.8), dpi=200, sharey=True)
+  top = 0
+  for j, (kind, arms, what) in enumerate(Panels):
+    a = ax[j]
+    who = [w for w in arms
+           if glob.glob(f"{Cache}/{kind}/*/{w}.csv")
+           or glob.glob(f"{Cache}/{kind}/*/*/{w}.csv")]
+    S   = sample(kind, who)
+    cur = {w: sorted(st.fmean(v) for _, d in S if (v := cells(d, w, "secs")))
+           for w in who}
+    a.spines[["top", "right"]].set_visible(False)
+    a.grid(axis="y", color="#eeeeee", zorder=0)
+    for w in who:
+      xs = cur[w]
+      if not xs: continue
+      top = max(top, max(xs))
+      a.plot(range(1, len(xs) + 1), xs, lab[w][1], color=lab[w][0], lw=2.2,
+             zorder=3, label="{}   total {:,.0f}s".format(
+               short(w), sum(xs)))
+    a.set_yscale("log")
+    a.set_ylim(top=1e3)
+    a.legend(frameon=False, fontsize=8.5, loc="upper left")
+    a.set_title(f"{kind}  ({what})\n{len(S)} sets", fontsize=11, pad=8)
+    a.set_xlabel("sets, each curve sorted on its own", fontsize=9.5,
+                 labelpad=8)
+  for y, t in ((1, "1 second"), (60, "1 minute"), (3600, "1 hour")):
+    if y <= top:
+      for a in ax: a.axhline(y, color="#cccccc", lw=1, zorder=1)
+      ax[2].text(1, y, t + " ", fontsize=8, color="#999999", va="bottom",
+                 ha="right", transform=ax[2].get_yaxis_transform())
+  ax[0].set_ylabel("seconds for one fit and predict,\n"
+                   "mean of 20 seeds  (log)", fontsize=11)
+  f.suptitle("What one fit and predict costs, by what is being asked"
+             f"  ({Sample}-set sample of each corpus, spread across the"
+             " size range)", fontsize=13)
+  f.tight_layout()
+  f.savefig(f"{Docs}/rawall.png", bbox_inches="tight"); plt.close(f)
+  print(f"{Docs}/rawall.png")
+
 if __name__ == "__main__":
+  # labelsreg/labelsopt are the SA pair: same data as labels/optlabels,
+  # scored against random guessing so one 0..1 axis serves both corpora.
+  # Named jobs, not members of the default list: labels.png and top5.png
+  # are pinned and must not be redrawn by a bare run.
   extra = {"optlabels": lambda: labels("optimize", "optlabels", vs="tabicl"),
-           "opt":       lambda: top5("optimize", "opt")}
+           "opt":       lambda: top5("optimize", "opt"),
+           "labelsreg": lambda: labels("regression", "labelsreg",
+                                       stdacc=True),
+           "labelsopt": lambda: labels("optimize", "labelsopt",
+                                       stdacc=True),
+           "top5reg":   lambda: top5("regression", "top5reg"),
+           "top5opt":   lambda: top5("optimize", "top5opt"),
+           "profopt":   lambda: profile("optimize", "profopt"),
+           "profreg":   lambda: profile("regression", "profreg"),
+           "winopt":    lambda: profile("optimize", "winopt", "win"),
+           "winreg":    lambda: profile("regression", "winreg", "win")}
   jobs = sys.argv[1:] or ["clas", "labels", "top5", "optlabels", "opt",
-                          "secs", "cost", "raw", "rawclas", "auc", "pdpf",
+                          "secs", "cost", "raw", "rawclas", "rawall", "auc", "pdpf",
                           "tree", "arms"]
   for j in jobs: (extra.get(j) or globals()[j])()
