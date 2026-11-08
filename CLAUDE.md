@@ -167,7 +167,7 @@ GC-heavy processes punish each other more than five lean ones do, so
 contention flattered the new code by a factor of four. Measured
 single threaded, that stage is 2.23x. Any speedup taken from a
 parallel corpus run is measuring the scheduler as much as the code --
-the reason `secs.png` still carries the warning below.
+the reason `attic/secs.png` still carries the warning below.
 
 `luajit -jp=vf` found 45% of a forest run in the garbage collector,
 86% of it under `cut`, which built `rows x cols` throwaway tables at
@@ -244,7 +244,7 @@ Settle this before citing either number.
   sets in all. Both the lua and python readers share the rule, so
   comparisons stay fair.
 - Timings were measured under parallel load. A clean single-threaded
-  pass is needed before `secs.png` carries a strong claim.
+  pass is needed before `attic/secs.png` carries a strong claim.
 - **The tab-vs-LightGBM seconds are not a comparison.** `etc/lgbm.py`
   times with `time.time()` -- wall -- and never set `n_jobs`, so
   LightGBM took all 10 cores; `tab-eg.lua` times with `os.clock()` --
@@ -261,7 +261,7 @@ Settle this before citing either number.
       tab 2.088s   lgbm 5.061s   2.42x by sum, 1.52x geometric mean
       tab wins 7 of 14 sets and loses 7
 
-  So the ~9x on `raw.png` is wrong by about 4x, and the real result is
+  So the ~9x on `attic/raw.png` is wrong by about 4x, and the real result is
   a split decision: tab wins where klasses are many (MiceProtein
   11.8x, audiology 6.7x, primary.tumor 6.1x) and loses on binary sets
   (credit.g 0.18x, kr.vs.kp 0.35x, diabetes 0.46x). Two things made
@@ -278,7 +278,7 @@ Settle this before citing either number.
   threaded one has to be read as suspect until a minimum, not a mean,
   says otherwise.
 
-  `raw.png`, `rawclas.png`, `secs.png` and `cost.png` still read the
+  `attic/raw.png`, `attic/rawclas.png`, `attic/secs.png` and `attic/cost.png` still read the
   `secs` column out of the `-P 8` corpus caches and are NOT fixed by
   the above, which is a separate 14-set harness. Repairing them needs
   a clean corpus-wide pass: about 25 min for tab, 45 for lgbm, and

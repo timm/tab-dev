@@ -21,27 +21,60 @@ Docs  = os.getenv("DOCS") or os.path.join(os.path.dirname(
 Moot  = os.path.expanduser("~/gits/moot")
 
 # one look per arm: colour, line style, marker, legend name
+# Measured, not chosen by eye.  The old green/olive/orange set failed
+# every red-green check: `acquire` and `forest` sat 5.9 apart in OKLab
+# for a deuteranope and `forest` and `LightGBM` 4.4 apart for a
+# protanope, against a floor of 8 -- and both pairs were drawn solid,
+# so there was no second cue to fall back on.  These four are the
+# best-separating Okabe-Ito quartet that also clears 3:1 contrast on
+# white: worst pair 11.2 (deutan), 16.4 under normal vision.
+#
+# `grab` was grey here first and measured 46 from black `forest` --
+# an enormous number -- and was still unreadable beside it.  Two
+# achromatic lines differ only in LIGHTNESS, and a 2px anti-aliased
+# stroke eats lightness; dE does not know how thin the mark is.  So
+# no two neutrals in one chart, whatever the number says: `grab` is
+# blue, which differs in HUE and survives the stroke.  `nb` is
+# also black, but no figure draws a classify arm beside a forest one;
+# if one ever does, re-run the check before trusting the eye.
 Look = {
-  "nb":        ("#000000", "--", "o", "naive Bayes (self-tuned)"),
+  "nb":        ("#0072B2", "--", "o", "naive Bayes (self-tuned)"),
   "rmeans":    ("#a6cee3", "-",  "o", "rmeans, 45 labels"),
   "rmeansall": ("#1f5f9e", "-",  "o", "rmeans, every row"),
   # Same 45-label budget as `rmeans`, spent on rows `acquire` chose:
   # near the best labelled rows, far from the rest.  It has no y
   # model, so it appears only where the score is an ORDER (top5),
   # never on mae or SA.
-  "lgbm45":    ("#d4663a", ":",  "o", "LightGBM, 45 labels"),
-  "acq":       ("#2a9d3f", "-",  "D", "acquire, 45 labels"),
+  "lgbm45":    ("#D55E00", "-",  "o", "LightGBM, 45 labels"),
+  "acq":       ("#009E73", "-",  "D", "acquire, 45 labels"),
+  # `acq`'s control: the same 45 labels, the same best/rest split, the
+  # same ranking key -- picked at random instead of chosen.  Grey, not
+  # a second green: `acq` and `grab` share the 45-label budget, so the
+  # dash that separates every other pair on these charts cannot
+  # separate this one, and a baseline reads as a baseline in grey.
+  "grab":      ("#0072B2", "-",  "D", "grab, 45 random labels"),
+  # `acqtree` reads `acq`'s own 45 rows with a tree instead of two
+  # centroids.  It shared acquire's hue at first, to say "one budget,
+  # two readings" -- but on the win charts the dash is spoken for
+  # (it marks the every-row half of a pair), so both arms drew solid
+  # green and neither could be followed.  Blue instead: a reading is
+  # a model, and a model gets its own hue.
+  "acqtree":   ("#0072B2", "-",  "D", "acquire 45, solo tree"),
   # The classification forest, read at the leaf instead of voted on:
   # a leaf answers with the mean y of the rows that reached it, so a
   # continuous goal gets a near-continuous score without any
   # regression tree.  Splits are still tab's entropy cut, on a
   # "better half of what we labelled" klass.
-  "fornum45":  ("#8c6d1f", "-",  "v", "forest(30), 45 labels"),
-  "fornumall": ("#5a3fc0", "-",  "^", "forest(30), every row"),
+  # One hue for the pair, because it IS one learner -- only the label
+  # budget differs, and that is what the dash carries: dashed = the
+  # 45 we are allowed, solid = every row.  Two hues would read as two
+  # algorithms and invite a comparison that is not the one on offer.
+  "fornum45":  ("#000000", "-",  "v", "forest(30), 45 labels"),
+  "fornumall": ("#000000", "--", "^", "forest(30), every row"),
   "nb50":      ("#1f5f9e", "--", "D", "naive Bayes, 50 labels"),
-  "nb72":      ("#000000", "--", "o", "naive Bayes (bins=7, m=2)"),
-  "lgbm":      ("#e9622e", "-",  "o", "LightGBM"),
-  "tabicl":    ("#860c4f", "-",  "s", "TabICLv2"),
+  "nb72":      ("#0072B2", "--", "o", "naive Bayes (bins=7, m=2)"),
+  "lgbm":      ("#D55E00", "--", "o", "LightGBM"),
+  "tabicl":    ("#860c4f", "--", "s", "TabICLv2"),
   "tabpfn":    ("#e7298a", "--", "^", "TabPFN-3"),
   "treemaj":   ("#d9661f", "-",  "o", "tree, majority at the leaf"),
   "treenb":    ("#6a3d9a", "-",  "s", "tree, naive Bayes at the leaf"),
@@ -49,7 +82,7 @@ Look = {
   "forraw":    ("#7fbf7b", "--", "v", "bagged trees, raw columns"),
   "bagboraw":  ("#4a9c6d", "-.", "D", "boosted bags, raw columns"),
   "boostraw":  ("#1b7837", "-",  "^", "boosted trees, raw columns"),
-  "treedeep":  ("#000000", "-",  "o", "tree, deep (depth=12 leaf=2)"),
+  "treedeep":  ("#009E73", "-",  "o", "tree, deep (depth=12 leaf=2)"),
   "fordeep":   ("#7fbf7b", "-",  "v", "forest of 30 deep trees"),
   "for60":     ("#1b7837", "-",  "v", "forest of 60 deep trees"),
   "either60":  ("#122b0f", "-",  "*", "60-tree forest or naive Bayes, "
@@ -62,8 +95,12 @@ Look = {
   # Two arms tried and rejected (see tab-dev/CLAUDE.md).  They are
   # listed so a cache holding them can be drawn; the live cache does
   # not, so the glob below keeps them out of the standing figures.
-  "fft":       ("#d95f02", ":",  "P", "best frugal chain off one tree"),
-  "rnb":       ("#8c6bb1", ":",  "X", "30 naive Bayes, subspaces"),
+  "fft":       ("#009E73", ":",  "P", "best frugal chain off one tree"),
+  # A searched violet, not a picked one: against the other five on
+  # these figures the Okabe-Ito pink sat 7.6 from `fft` for a
+  # deuteranope, under the floor of 8.  This clears every pair --
+  # worst 10.0 under CVD, 18.7 under normal vision.
+  "rnb":       ("#8900E5", ":",  "X", "30 naive Bayes, subspaces"),
   # The same forest, with the numeric cut search done over `cuts`
   # bins instead of every distinct value -- no sort at all.  Drawn
   # beside `hardeep` so the approximation is visible, not assumed.
@@ -72,7 +109,13 @@ Look = {
   # than sorting and accumulating `Sym`s -- 10x on the corpus, same
   # scores.  There is only one forest arm now, so the name needs no
   # qualifier.
-  "hardhist":  ("#31a354", "-.", "^", "forest of 30")}
+  # Black, the same hue `fornum45`/`fornumall` carry on the win and
+  # labels figures: it is the same forest of 30, so a reader crossing
+  # between a classify figure and an optimize one should not have to
+  # re-learn it.  `lgbm` and `tabicl` already match for the same
+  # reason.  That pushed `nb` and `treedeep`, which used to be black,
+  # onto blue and green.
+  "hardhist":  ("#000000", "-.", "^", "forest of 30")}
 
 # A short name per arm, for places where the long one does not fit.
 # The strip above each panel prints five of these side by side, and
@@ -147,8 +190,11 @@ def agree(ax, names, a, b, tol, note=None):
   hit = [i for i, n in enumerate(names)
          if a.get(n) is not None and b.get(n) is not None
          and abs(a[n] - b[n]) <= tol]
-  for i in hit:
-    ax.axvspan(i - .5, i + .5, color="#000000", alpha=.07, lw=0, zorder=0)
+  # The band is NOT drawn.  `auc` and `pdpf` carry four arms over a
+  # hundred-odd sets, and a grey column behind every near-tie turned
+  # most of the panel grey -- shading that covers the majority of a
+  # figure stops marking anything.  The test still runs: callers use
+  # the returned index list, and the counts still print.
   return hit
 
 def dashes(ax, step):
@@ -525,9 +571,21 @@ def labels(kind="regression", name="labels", vs="lgbm", logy=None,
            stdacc=False):
   "Raw MAE on moot/regression: 45 labels against everyone's all."
   # No `acq` here: it ranks without estimating y, so it has no mae
-  # and no SA.  The forest arms do predict y, so they belong.
-  who = ranarms(["rmeans", "rmeansall", "fornum45", "fornumall",
-                 "lgbm"])
+  # and no SA.  `acqtree` spends the SAME 45 rows `acq` picked but
+  # reads them with a tree, which does predict y -- so the one arm of
+  # the pair that can appear on an error axis is this one.  The forest
+  # arms predict y too, and belong for the same reason.
+  # Same four as the win charts, in the same order and the same
+  # colours: `fornum45`, `fornumall`, `lgbm45`, `lgbm`.  The two
+  # families then differ by exactly one arm each, and for a reason
+  # the measure forces -- `acq` has no y estimate so it cannot carry
+  # an mae, and `tabicl` has no `win` column so it cannot carry a
+  # win.  Everything else is common, so a reader can carry a colour
+  # from one figure to the other.
+  who = ranarms(["fornum45", "fornumall", "lgbm45", "lgbm"])
+  # The complete-case gate still names the rmeans arms even though
+  # neither is drawn: they ran on all 187 sets, so gating on them is
+  # the widest gate available and swapping it would silently move n.
   S   = sets(kind, ["rmeans", "rmeansall", "lgbm"])
   # SA, or raw mae.  SA is unitless, so on that axis a regression set
   # in dollars sits beside an optimize set in d2h and the two mean the
@@ -536,13 +594,16 @@ def labels(kind="regression", name="labels", vs="lgbm", logy=None,
           for w in who} if stdacc else
          {w: {n: st.median(cells(d, w, "mae") or [float("nan")])
               for n, d in S} for w in who})
-  # Grey marks "no real difference from rmeans on 45 labels".  Against
-  # lgbm that is the three effect-size tests; against anything else it
-  # is MaeNear, in raw mae units.  Mind that mae spans six orders of
-  # magnitude here, so one flat window is generous on the small sets
-  # and strict on the large.
+  # Grey marks "no real difference from the 45-label arm".  That used
+  # to be `rmeans`, which this figure no longer draws -- a band whose
+  # meaning rests on an arm the reader cannot see is a band that
+  # cannot be checked -- so it is `fornum45` now, which is drawn.
+  # Against lgbm the test is the three effect sizes; against anything
+  # else it is MaeNear in raw mae units, and mind that mae spans six
+  # orders of magnitude here, so one flat window is generous on the
+  # small sets and strict on the large.
   def near(d):
-    a, b = cells(d, "rmeans", "mae"), cells(d, vs, "mae")
+    a, b = cells(d, "fornum45", "mae"), cells(d, vs, "mae")
     if not a or not b: return False
     if vs == "lgbm":   return M.same(a, b)
     return abs(st.median(a) - st.median(b)) <= MaeNear
@@ -577,10 +638,6 @@ def labels(kind="regression", name="labels", vs="lgbm", logy=None,
     f, ax = fig(13, 6)
     sx = None
   xa = sx if sx is not None else ax
-  for j, n in enumerate(names):
-    if tie[n]:
-      for a in (ax, sx) if sx is not None else (ax,):
-        a.axvspan(j - .5, j + .5, color="#e8e8e8", zorder=0)
   for w in who:
     ys = [med[w][n] for n in names]
     if not any(y == y for y in ys): continue   # not run yet: no legend line
@@ -615,12 +672,15 @@ def labels(kind="regression", name="labels", vs="lgbm", logy=None,
   xa.set_xticks(range(len(names)))
   xa.set_xticklabels([f"{n} ({int(.8*rows(n,kind))})"
                       for n in names])
+  # No red marks and no grey bands on this figure: `mark` colours a
+  # hand-listed set of names, which is an assertion the chart cannot
+  # support, and the bands lost their legend entry already.  The tie
+  # test survives as the grey tick labels alone -- one cue, not three.
   for t, n in zip(xa.get_xticklabels(), names):
     if tie[n]: t.set_color("#999999")
-  mark(xa, names)
-  ax.plot([], [], lw=8, color="#e8e8e8",
-          label="45 labels == LightGBM (cohen, cliffs, ks)" if vs == "lgbm"
-          else f"45 labels within {MaeNear:g} mae of {Look[vs][3]}")
+  # The grey keeps its bands and its grey tick labels; only the legend
+  # entry goes.  Five words of legend were buying one swatch that the
+  # x axis already explains, and the entry was the widest in the row.
   # Above the axes on SA, not inside it: the lines run the full height
   # of a 0..1 panel and a box in any corner sits on top of data.
   if stdacc:
@@ -633,7 +693,7 @@ def labels(kind="regression", name="labels", vs="lgbm", logy=None,
     # The pair the grey columns already test, so the strip answers the
     # question the shading raises: is that gap bigger than the noise?
     def pooled(n,    u=None, v=None):
-      u = sas(dirof[n], "rmeans", kind, n)
+      u = sas(dirof[n], "fornum45", kind, n)
       v = sas(dirof[n], vs, kind, n)
       if not u or not v: return None
       return ((((len(u)-1) * st.pstdev(u)**2
@@ -643,7 +703,7 @@ def labels(kind="regression", name="labels", vs="lgbm", logy=None,
     if any(sds):
       okd = [x for x in sds if x]
       sdstrip(sx, names, sds,
-              f"of {Look['rmeans'][3]} and {Look[vs][3]}, in SA",
+              f"of {Look['fornum45'][3]} and {Look[vs][3]}, in SA",
               cap=4 * st.median(okd))
   save(f, ax, name,
        ("Standardised accuracy: how far past random guessing?"
@@ -667,12 +727,25 @@ def profile(kind="optimize", name="prof", col="rank"):
   often each arm lands inside 5%.  That is where a curve crosses the
   green line, read off the x axis.
   """
-  who = ranarms(["rmeans", "rmeansall", "acq", "fornum45",
-                 "fornumall", "lgbm45", "lgbm"])
+  # `win` drops both rmeans arms and `grab`.  `grab` -- 45 rows at
+  # random, same split, same key, no acquiring -- did its job as a
+  # control off-chart: it scores 91 to acquire's 93 on optimize and
+  # wins 43 sets to 46, so the acquisition step buys nothing there.
+  # That is a result to write down, not a sixth line to carry on a
+  # chart about what a label budget can reach.  `tab-eg.lua grab` and
+  # its cached csvs stay, so the comparison re-runs whenever asked.
+  who = ranarms((["acq", "fornum45",
+                  "fornumall", "lgbm45", "lgbm"] if col == "win" else
+                 ["rmeans", "rmeansall", "acq", "fornum45",
+                  "fornumall", "lgbm45", "lgbm"]))
   S   = sets(kind, ["rmeans", "rmeansall"])
-  med = {w: {n: (lambda v: st.median(v) if v else float("nan"))(
-               cells(d, w, col)) for n, d in S} for w in who}
-  f, ax = fig(9, 5.6)
+  # Keep the reps, not just their median: the strip under `win` needs
+  # the spread WITHIN a set, which a median has already thrown away.
+  raw = {w: {n: (cells(d, w, col) or []) for n, d in S} for w in who}
+  med = {w: {n: (st.median(v) if v else float("nan"))
+             for n, v in raw[w].items()} for w in who}
+  sdev = {w: {n: (st.stdev(v) if len(v) > 1 else float("nan"))
+              for n, v in raw[w].items()} for w in who}
   # `rank` is a percentile and small is good; `win` is a percent of
   # the gap to an average row closed, and big is good.  So `win`
   # sorts the other way, shades the other side of its line, and
@@ -680,31 +753,94 @@ def profile(kind="optimize", name="prof", col="rank"):
   up   = col == "win"
   line = float(os.getenv("WINLINE", 90)) if up else 5
   cap  = float(os.getenv("TOP5CAP", 20))
-  ax.axhspan(line, 100, color="#eef4ee", zorder=0) if up else \
+  if up:
+    f, (ax, sx) = plt.subplots(2, 1, figsize=(9, 7.2), dpi=200,
+                               sharex=True,
+                               gridspec_kw=dict(height_ratios=[4, 1.5],
+                                                hspace=.10))
+    for a in (ax, sx):
+      a.spines[["top", "right"]].set_visible(False)
+      a.grid(axis="y", color="#eeeeee", zorder=0)
+    # Dashed rule every 5 points.  The curves run flat across the top
+    # for half the corpus, so a reader asking "is that 97 or 99?"
+    # has nothing to measure against; majors every 20 are too coarse
+    # to answer it and labelling all 21 would bury the data in text.
+    ax.set_yticks(range(0, 101, 5), minor=True)
+    ax.grid(axis="y", which="minor", color="#dddddd", ls="--", lw=.6,
+            zorder=0)
+  else:
+    f, ax = fig(9, 5.6)
+    sx = None
+  # `rank` keeps its 5% line: the whole claim is a count of sets
+  # under it.  `win` drops it.  Any line there would be a threshold
+  # we picked, and the curve already reads off the y axis -- 90 means
+  # we closed nine tenths of the gap, on the tenth-worst set or
+  # wherever the reader puts a finger.
+  if not up:
     ax.axhspan(0, line, color="#eef4ee", zorder=0)
-  ax.axhline(line, color="#2d7a2d", ls="--", lw=1.2, zorder=2,
-             label=f"the {line:.0f}% line")
+    ax.axhline(line, color="#2d7a2d", ls="--", lw=1.2, zorder=2,
+               label=f"the {line:.0f}% line")
+  # The dash splits a PAIR, it does not grade an arm.  `forest` and
+  # `LightGBM` each run twice -- 45 labels and every row -- and each
+  # pair shares one hue, so within a pair the dash is the only thing
+  # telling the two apart and it has to be there.  `grab` and
+  # `acquire` have their own hues and no twin, so a dash on them said
+  # nothing and only made the chart busier.  Solid unless the arm has
+  # a same-hue sibling to be told apart from.
+  Thin = {"fornumall", "lgbm"}    # the every-row half of a hue pair
   for w in who:
     v = sorted((x for x in med[w].values() if x == x), reverse=up)
     if len(v) < 2: continue
     xs = [100 * j / (len(v) - 1) for j in range(len(v))]
     c, ls, mk, lab = Look[w]
+    if up:
+      # Pooled sd over the sets: sqrt of the mean within-set variance,
+      # which is the usual pooling with 20 reps everywhere.  It is the
+      # noise a single number like the median is quoted against -- a
+      # two-point gap between two arms means nothing beside an sd of
+      # eight.
+      ss = [sdev[w][n] for n in med[w] if sdev[w][n] == sdev[w][n]]
+      pool = (sum(x * x for x in ss) / len(ss)) ** .5 if ss else float("nan")
+      # No line to count against, so the legend carries the median
+      # instead: a summary that needs no threshold of ours.
+      ax.plot(xs, v, "--" if w in Thin else "-", color=c, lw=2,
+              zorder=3,
+              label="{}  (median {:.0f}, pooled sd {:.1f}, n={})".format(
+                lab, st.median(v), pool, len(v)))
+      # The strip sorts on ITSELF, like the panel above it.  Keeping
+      # the top panel's set order instead was tried and is a hash:
+      # seven jagged lines over each other, no curve followable.  The
+      # per-set pairing that ordering preserved is not a thing anyone
+      # reads off a 128-set strip anyway -- the question here is how
+      # much of the corpus is quiet, which a sorted curve answers.
+      sv = sorted((x for x in sdev[w].values() if x == x))
+      sx.plot([100 * j / (len(sv) - 1) for j in range(len(sv))], sv,
+              "--" if w in Thin else "-", color=c, lw=1.4, zorder=3)
+      continue
     good = sum(1 for y in v if (y >= line if up else y <= line))
     ax.plot(xs, v, ls, color=c, lw=2, zorder=3,
             label="{}  ({}/{} {} {:.0f}%)".format(
               lab, good, len(v), "over" if up else "inside", line))
   ax.set_ylim((0, 100) if up else (0, cap))
   ax.set_xlim(0, 100)
-  ax.legend(frameon=False, fontsize=10, loc="upper left")
+  # Each curve starts where its measure is best, so the legend has to
+  # sit at the other corner: `rank` climbs away from the origin, `win`
+  # falls away from the top left.
+  ax.legend(frameon=False, fontsize=9,
+            loc="lower left" if up else "upper left")
+  if sx is not None:
+    sx.set_ylim(bottom=0)
+    sx.set_ylabel("sd of the\n20 reps", fontsize=9.5)
   save(f, ax, name,
-       "How often does an arm's top 5 hold a good row?"
+       "Best row found by labelling the top 5 guesses"
        f"   [moot/{kind}]",
        "percent of data sets, each arm sorted on its own result",
-       ("how much of the gap an average row leaves we closed\n"
-        "(100 = we found the very best row, 0 = no better than average)"
+       ("percent of the average-to-best gap closed\n"
+        "(100 = the best row, 0 = an average one)"
         if up else
         "best of our top 5, as a percentile of the test set\n"
-        "(0 = we found the very best row)"), rot=0, size=10)
+        "(0 = we found the very best row)"), rot=0, size=10,
+       xax=sx, tight=sx is None)
 
 def top5(kind="regression", name="top5"):
   "Label only each arm's top 5: how good is the best of those?"
@@ -1015,7 +1151,7 @@ def auc():
   # reaches.  Grey asks one question -- is the forest TabICL yet?
   who = tuple(["hardhistauc", "lgbmauc"]
               + [w for w in ("tabiclauc", "tabpfnauc",
-                             "treedeepauc", "nbauc", "fftauc", "rnbauc",
+                             "nbauc", "fftauc", "rnbauc",
                              "hardbinauc")
                  if glob.glob(f"{Cache}/classify/*/{w}.csv")])
   Pair = ("hardhistauc", "tabiclauc")  # what the sort and sd strip use
@@ -1223,8 +1359,6 @@ def panels(name, who, vs, title, lead):
     # and would otherwise swallow the rules they cross.
     a.grid(axis="y", which="major", color="#c9c9c9", lw=.9, zorder=1.6)
     a.grid(axis="y", which="minor", color="#dedede", lw=.6, zorder=1.5)
-    for j in tie:
-      a.axvspan(j - .5, j + .5, color="#ececec", lw=0, zorder=0)
     for j in edge:
       a.axvline(j - .5, color="#999999", lw=.8, zorder=2)
     for w in who:
@@ -1262,8 +1396,6 @@ def panels(name, who, vs, title, lead):
            for n in names
            for x, y in [(raw[n][base, col], raw[n][vs, col])]]
     sx.spines[["top", "right"]].set_visible(False)
-    for j in tie:
-      sx.axvspan(j - .5, j + .5, color="#ececec", lw=0, zorder=0)
     for j in edge:
       sx.axvline(j - .5, color="#999999", lw=.8, zorder=2)
     sx.bar(range(len(names)), sds, width=.62, color="#9aa5ad", lw=0,
@@ -1337,7 +1469,6 @@ def pdpf():
   shown, so the means below compare on one corpus.
   """
   fam = [("nb",       "one model"),
-         ("treedeep", "one model"),
          ("fft",      "one model"),
          ("lgbm",     "many models"),
          ("hardhist", "many models"),
@@ -1404,8 +1535,11 @@ def pdpf():
       col, ls, mk, _ = lab[w]
       a.plot(range(len(names)), [med[(w, c)][n] for n in names], ls,
              color=col, marker=mk, ms=3.5, lw=1.5,
-             label="{}: {}  [{}]".format(short(w), lab[w][3],
-                                         dict(fam)[w]), zorder=3)
+             # Same string `auc` builds, so one legend reads for both.
+             # The family tag that used to close this entry is gone:
+             # it was the only thing parting the two figures' legends,
+             # and the grouping it named is in the docstring already.
+             label="{}: {}".format(short(w), lab[w][3]), zorder=3)
     a.set_ylim(0, 100)
     dashes(a, 5)                   # every 5%, unlabelled
     a.set_ylabel(ylab, fontsize=11)
@@ -1435,9 +1569,6 @@ def pdpf():
     sx  = ax[2 * k + 1]
     sx.spines[["top", "right"]].set_visible(False)
     for j in edge: sx.axvline(j - .5, color="#999999", lw=1, zorder=2)
-    if c in shade:
-      for i in shade[c]:
-        sx.axvspan(i - .5, i + .5, color="#000000", alpha=.07, lw=0, zorder=0)
     sds = [pooledsd(dirof[n], *Near, c) for n in names]
     if any(sds):
       sdstrip(sx, names, sds, "{} and {}, {}".format(
@@ -1464,11 +1595,18 @@ def rawnum():
   classify panel holds the SAME forest code voting on klasses, which
   is the only honest ancestor to compare the other two panels with.
   """
+  # The same arms the win and labels figures carry, in the same
+  # colours: what an arm costs and what it scores belong to one
+  # reader.  The rmeans pair is gone from both of those, so it goes
+  # from here.  `treedeep` joins the klass panel so this figure now
+  # covers everything `rawclas` drew, which is why that one is in
+  # docs/attic -- minus `treedeep`, which `auc` and `pdpf` no longer
+  # draw either, so the klass arms are the same four everywhere.
   Panel = (("classify",   ["nb", "hardhist", "lgbm", "tabicl"]),
-           ("regression", ["rmeans", "rmeansall", "acq", "fornum45",
-                           "fornumall", "lgbm", "tabicl"]),
-           ("optimize",   ["rmeans", "rmeansall", "acq", "fornum45",
-                           "fornumall", "lgbm", "tabicl"]))
+           ("regression", ["acq", "fornum45", "fornumall", "lgbm45",
+                           "lgbm", "tabicl"]),
+           ("optimize",   ["acq", "fornum45", "fornumall", "lgbm45",
+                           "lgbm", "tabicl"]))
   f, ax = plt.subplots(1, 3, figsize=(18, 6.4), dpi=200, sharey=True)
   for k, (kind, who) in enumerate(Panel):
     a, cur = ax[k], {w: [] for w in who}
@@ -1583,7 +1721,21 @@ if __name__ == "__main__":
            "profreg":   lambda: profile("regression", "profreg"),
            "winopt":    lambda: profile("optimize", "winopt", "win"),
            "winreg":    lambda: profile("regression", "winreg", "win")}
-  jobs = sys.argv[1:] or ["clas", "labels", "top5", "optlabels", "opt",
-                          "secs", "cost", "raw", "rawclas", "rawall", "auc", "pdpf",
-                          "tree", "arms"]
+  # `top5`, `labels` and `arms` are off the default list and their pngs live in
+  # docs/attic: `top5reg`/`top5opt` carry the same question with the
+  # arms that came later, and every arm and measure `arms` drew is in
+  # `pdpf` or `auc` already.  Both still run if named, and both still
+  # write to docs/ -- naming one is how you ask for it back.
+  # The live figures, and only those.  Everything else this file can
+  # still draw is a named job whose png lives in docs/attic: the
+  # figures a decision rests on are in docs/, and a bare run cannot
+  # resurrect a retired one beside them.
+  # `clas` is NOT here: it indexes `ax[2*k]` over three columns but
+  # builds three axes, so it raises IndexError before drawing a
+  # thing.  That is older than this list -- clas.png on disk is from
+  # 2026-11-04 and predates whoever added the third column -- and it
+  # is a figure to repair, not a job to keep crashing a bare run.
+  jobs = sys.argv[1:] or ["auc", "pdpf",
+                          "labelsreg", "labelsopt", "winreg", "winopt",
+                          "rawnum"]
   for j in jobs: (extra.get(j) or globals()[j])()

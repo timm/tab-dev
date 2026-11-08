@@ -48,7 +48,7 @@ Kolmogorov-Smirnov <= 1.36, all three agreeing.
 
 ## RQ1: do simple classifiers work?
 
-![simple classifiers](docs/clas.png)
+![simple classifiers](docs/attic/clas.png)
 
 | arm | wins | ties | losses | median accuracy |
 |---|---|---|---|---|
@@ -68,7 +68,7 @@ Kolmogorov-Smirnov <= 1.36, all three agreeing.
 
 ## RQ2: do simple regressors work?
 
-![labels vs error](docs/labels.png)
+![labels vs error](docs/attic/labels.png)
 
 `rmeans`, raw MAE, against LightGBM reading all of the 80%:
 
@@ -94,7 +94,7 @@ Kolmogorov-Smirnov <= 1.36, all three agreeing.
 Ranking is an easier question than prediction: get the *order*
 right and the values can be wrong.
 
-![top five, regression](docs/top5.png)
+![top five, regression](docs/attic/top5.png)
 
 *One target, 60 regression sets.*  Rank the held-out rows by the
 guess, label the top five, keep the best of those.  The y axis
@@ -108,7 +108,7 @@ is that row's rank as a percent of the test set.
   terrible MAE (2.90 against 0.80) and still puts a top-1.8% row
   in its first five picks.
 
-![top five, multi-objective](docs/opt.png)
+![top five, multi-objective](docs/attic/opt.png)
 
 *Every goal at once, 125 optimize sets.*  Same protocol, `y` =
 distance to heaven over all goals.
@@ -128,7 +128,7 @@ distance to heaven over all goals.
 
 ## Is there anything to tune?
 
-![m-estimate sweep](docs/hpo.png)
+![m-estimate sweep](docs/attic/hpo.png)
 
 The estimator has one free parameter: `m`, the prior weight that
 pulls a bin mean toward the grand mean.  A sweep over
@@ -179,7 +179,7 @@ rows, hence the falling set counts.
 The second knob is `bins`, how many slices a numeric column is
 cut into.  Same rig, `m` held at 2:
 
-![bins sweep](docs/bins.png)
+![bins sweep](docs/attic/bins.png)
 
 | labels | sets | bins=3 | bins=5 | bins=7 | bins=9 | bins=11 |
 |---|---|---|---|---|---|---|
@@ -208,7 +208,7 @@ cut into.  Same rig, `m` held at 2:
 
 ## Does splitting first help a naive Bayes?
 
-![tree](docs/tree.png)
+![tree](docs/attic/tree.png)
 
 A binary tree grown on klass entropy -- the same cut search as the
 regression tree, with `Sym` collecting the scores so `div` is
@@ -242,7 +242,7 @@ the answer given at the leaf.  72 `moot/classify` sets.
 
 ## How far behind is a naive Bayes?
 
-![arms](docs/arms.png)
+![arms](docs/attic/arms.png)
 
 The same three panels against a gradient booster and a foundation
 model, on the 67 sets all three completed.
@@ -333,9 +333,71 @@ The negative result is what survives:
   this document keeps arriving at stands: run the cheap learner,
   and keep the rig that tells you when it was not enough.
 
+## When are 45 labels enough?
+
+The section above found no property of a data set's *shape* that
+says whether a simple classifier will do.  Asked of optimisation
+and regression, and allowed to look at the *labels* rather than
+the shape, the answer changes.
+
+Across the 187 sets the win figures draw, the arms split into two
+populations, and the separator is a property of the 45 labelled y
+values themselves: **(mu-lo)/sd**, how far their mean sits above
+the best of them, in units of their spread.  Below 2.25 (n=114),
+`acquire` reaches a median win of **98** -- within two points of
+LightGBM trained on every row.  Above 2.25 (n=73) it falls to
+**72**.
+
+What fails above that line is the budget, not the method:
+
+| arm | (mu-lo)/sd <= 2.25 | > 2.25 |
+|---|---|---|
+| acquire, 45 labels | 98 | **72** |
+| 45 random labels | 97.5 | 71 |
+| forest(30), 45 labels | 98 | 75 |
+| LightGBM, 45 labels | 92.5 | 63.5 |
+| forest(30), every row | 99 | **100** |
+| LightGBM | 100 | **100** |
+
+Every 45-label arm collapses together above the line, and
+forest(30) against `acquire` there is 29 wins to 28 -- a coin
+flip.  Both every-row arms stay pinned at 100.  The information is
+in the data; forty-five labels cannot reach it when the best row
+is an isolated outlier rather than one of a population of good
+ones.  This also locates LightGBM's advantage: against `acquire`
+it takes 55 of 57 decided sets above the line but only 59 of 72
+below it, so its lead sits almost entirely where the budget, not
+the learner, is binding.
+
+So the rule this yields is a **stopping rule, not a
+model-selection rule**.  Having spent 45 labels one already holds
+the 45 y values, so (mu-lo)/sd costs nothing further.  Low: the
+budget has done its work and more labels will buy little.  High:
+no change of acquisition strategy or learner will help, and the
+honest choices are to collect more labels or to report that the
+top five candidates will close about 70% of the available gap
+rather than all of it.
+
+Two checks the threshold survives.  It is not a disguised
+sample-size effect -- within fixed row bands it still separates
+the populations (cliffs 0.82 for 500-5000 rows, 0.64 above 5000),
+and the observed values sit well under the `sqrt(2 ln n)` expected
+of the minimum of n samples.  And it runs against its own
+confound: `(mu-lo)` is the denominator of the win measure, so
+mechanically a larger value *inflates* win for a fixed gap, the
+opposite of what is seen.
+
+Two shape properties do move here, where none moved for
+classification, and both restate the budget rather than the
+learner.  On optimize, easy sets carry a median of 2 goals against
+3 (cliffs 0.49) -- readable off the header before any label is
+spent.  On regression the split is row count, 189 against 8190
+(cliffs 0.64), which is the label fraction in other words: 45 of
+189 is 24% of the data, 45 of 8190 is 0.5%.
+
 ## What it costs
 
-![seconds](docs/secs.png)
+![seconds](docs/attic/secs.png)
 
 The same estimator, five ways: `min.py` under CPython and pypy,
 `jiffy.lua` under Lua and LuaJIT, `min.lisp` under SBCL.  Each

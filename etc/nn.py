@@ -8,7 +8,7 @@ that rmeans declines to label.
 usage: python3 ,/nn.py tabicl f.csv   (writes <cache>/<set>/tabicl.csv)
        python3 ,/nn.py tabpfn f.csv
 """
-import os, sys, time
+import os, sys, time, math
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import min as M
 from score import Acc, Auc, aucs, macro  # one auc for every arm, so they compare
@@ -87,6 +87,18 @@ def rank(want, got):
     if v == best: return 100 * n / max(1, len(ys) - 1)
   return 100
 
+def win(want, got):
+  """How much of the gap it closed: 100 = the best row, 0 = an average
+  one.  `rank` counts how many rows beat us and saturates where many
+  rows sit a hair apart; this counts the y given up instead.  Must
+  match `gap` in tab-eg.lua and `win` in lgbm.py, floor included, or
+  the arms do not compare."""
+  order = sorted(range(len(got)), key=lambda j: got[j])
+  best  = min(want[j] for j in order[:Check])
+  lo, mu = min(want), sum(want) / len(want)
+  if mu == lo: return 100
+  return int(math.floor(100 * (1 - (best - lo) / (mu - lo))))
+
 def klassOf(t, file):
   "Classify sets guess the last ! column, if it is discrete."
   if "/classify/" not in file: return None
@@ -129,13 +141,16 @@ def main(who, file):
     else:
       got  = list(model.predict(X2))
       line = (macro(y2, got) if klass else
-              f"{rank(y2, got):.3f},"
-              f"{sum(abs(a-b) for a, b in zip(y2, got)) / len(y2):.3f}")
+              f"{rank(y2, got):.3f},{win(y2, got)},"
+              # %.6g, not %.3f: three decimals rounded a small mae to
+              # the same string on every set and hid a stale cache
+              # once already.  Every other arm prints this way.
+              f"{sum(abs(a-b) for a, b in zip(y2, got)) / len(y2):.6g}")
     secs   = time.time() - t0
     lines.append(f"{s},{secs:.4f},{line}")
   with open(out, "w") as f:
     f.write("rep,secs," + (Auc if auc else
-                           Acc if klass else "rank,mae") + "\n")
+                           Acc if klass else "rank,win,mae") + "\n")
     f.write("\n".join(lines) + "\n")
   print(out)
 
