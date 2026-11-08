@@ -583,10 +583,9 @@ def labels(kind="regression", name="labels", vs="lgbm", logy=None,
   # win.  Everything else is common, so a reader can carry a colour
   # from one figure to the other.
   who = ranarms(["fornum45", "fornumall", "lgbm45", "lgbm"])
-  # The complete-case gate still names the rmeans arms even though
-  # neither is drawn: they ran on all 187 sets, so gating on them is
-  # the widest gate available and swapping it would silently move n.
-  S   = sets(kind, ["rmeans", "rmeansall", "lgbm"])
+  # Gate on arms that still exist; `acq`+`lgbm` select the identical
+  # 59/128 sets the retired rmeans pair used to.
+  S   = sets(kind, ["acq", "lgbm"])
   # SA, or raw mae.  SA is unitless, so on that axis a regression set
   # in dollars sits beside an optimize set in d2h and the two mean the
   # same thing; raw mae cannot cross that line at any scaling.
@@ -738,7 +737,11 @@ def profile(kind="optimize", name="prof", col="rank"):
                   "fornumall", "lgbm45", "lgbm"] if col == "win" else
                  ["rmeans", "rmeansall", "acq", "fornum45",
                   "fornumall", "lgbm45", "lgbm"]))
-  S   = sets(kind, ["rmeans", "rmeansall"])
+  # Gate on arms that still EXIST.  This named the rmeans pair, which
+  # is retired from tab.yue -- a complete-case gate on a learner no
+  # one can re-run is a gate that only works until the cache is
+  # cleaned.  `acq`+`lgbm` select the identical 59/128 sets.
+  S   = sets(kind, ["acq", "lgbm"])
   # Keep the reps, not just their median: the strip under `win` needs
   # the spread WITHIN a set, which a median has already thrown away.
   raw = {w: {n: (cells(d, w, col) or []) for n, d in S} for w in who}
