@@ -39,7 +39,6 @@ abs, min, max = math.abs, math.min, math.max
 
 TAB, NUM, SYM, NB, TREE, FOREST = {}, {}, {}, {}, {}, {}
 
-
 -- ---- values ---------------------------------------------------------
 values = (s) ->                   -- row; values from comma-separated `s`
   u = {}
@@ -56,7 +55,6 @@ csv = (file) ->                   -- rows; `rows` in a `file:str`
     if s != "" and s\sub(1, 1) != "#"
       rows[] = values(s)
   rows
-
 
 -- ---- columns --------------------------------------------------------
 Col = (txt, at) ->                -- SYM | NUM; a-z Sym; A-Z Num
@@ -81,14 +79,10 @@ SYM.div = =>                      -- num; entropy, in bits
   @n < 1 and 0 or max(0, log(@n) - @cl / @n) / log(2)
 
 SYM.mid = =>                      -- value; the mode
-  ks = {}
-  for v in pairs @has
-    ks[] = v
-  sort ks, (x, y) -> tostring(x) < tostring(y)
   local bk                        -- `local`: assigned inside the loop
   b = -1
-  for _, v in order ks
-    b, bk = @has[v], v if @has[v] > b
+  for v, c in pairs @has
+    b, bk = c, v if c > b or (c == b and tostring(v) < tostring(bk))
   bk
 
 SYM.norm = (v) => v               -- value; a sym is its own norm
@@ -96,7 +90,7 @@ SYM.holds = (x, v) => x == "?" or x == v
 SYM.bin = (v) => v                -- value; and its own bin
 
 SYM.nVals = =>                    -- int; values `@` has seen, at least 2
-  @kinds = @kinds or max(2, sum(@has, -> 1))
+  @kinds or= max(2, sum(@has, -> 1))
   @kinds
 
 Num = (txt="N", at=0) ->          -- NUM; Welford summary of column `at`
@@ -117,16 +111,13 @@ NUM.div = => @n < 2 and 0 or sqrt(max(@m2, 0) / (@n - 1))
 NUM.mid = => @mu                  -- num; the mean
 NUM.holds = (x, v) => x == "?" or x <= v  -- bool; "?" says yes, so a
 NUM.bin = (v) =>                  -- value; `v`'s bin, 1..`the.bins`
-  return v if v == "?"
-  b = 1 + floor(the.bins * @norm(v))
-  b > the.bins and the.bins or b
+  v == "?" and v or min the.bins, 1 + floor(the.bins * @norm(v))
 
 NUM.norm = (v) =>                 -- value; `v` on a logistic cdf,
   return v if v == "?"            -- clipped at three standard deviations
   z = (v - @mu) / (@div! + 1e-32)
   z = z > 3 and 3 or (z < -3 and -3 or z)
   1 / (1 + exp(-1.7 * z))
-
 
 -- ---- tables ---------------------------------------------------------
 Tab = (src) ->                    -- TAB from `src`: a file name, or rows
@@ -165,10 +156,7 @@ TAB.clone = (rows={}, how) =>     -- TAB; `rows` in a fresh TAB
   Tab out
 
 TAB.mid = (cols) =>               -- dict; {name: middle}, for logfmt
-  u = {}
-  for _, col in order (cols or @cols)
-    u[col.txt] = col\mid!
-  u
+  {col.txt, col\mid! for _, col in order (cols or @cols)}
 
 TAB.ydist = (row) =>              -- num; `row`'s distance to heaven
   on = (col) ->
@@ -189,25 +177,15 @@ TAB.xdist = (r1, r2) =>           -- num; how far apart two rows are, on x
   (sum(@x, on) / #@x) ^ (1 / the.p)
 
 TAB.mids = =>                     -- row; every column's middle, by `at`
-  u = {}
-  for _, col in order @cols
-    u[col.at] = col\mid!
-  u
+  {col.at, col\mid! for _, col in order @cols}
 
 TAB.split = =>                    -- rows,rows; 80:20, off a copy:
   rows = shuffle map(@rows, same) -- never @rows itself
   n = floor(.8 * #rows)
-  u1, u2 = {}, {}
-  t = u1
-  for j, row in order rows
-    t = u2 if j > n
-    t[] = row
-  u1, u2
-
+  rows[, n], rows[n + 1, ]
 
 -- ---- histogram cut ---------------------------------------------
 ThisC, ThatC, Hist = {}, {}, {}
-
 
 -- ---- binning, on the column itself --------------------------------
 NUM.slots = => 2 * floor(the.cuts / 2) + 1
@@ -220,20 +198,16 @@ NUM.slot  = (x) =>                 -- nil when there is nothing to cut
   b = floor((x - @mu) / @r + 0.5)  -- outliers pin to the end bins
   (b < -@hi and -@hi or (b > @hi and @hi or b)) + @hi + 1
 
-SYM.index = (    vs,v,n) =>
+SYM.index = (    vs) =>
   unless @vi
-    vs = {}
-    for v in pairs @has
-      vs[] = v
+    vs = [v for v in pairs @has]
     sort vs, (a, b) -> tostring(a) < tostring(b)
-    @vi, @vs = {}, vs
-    for n = 1, #vs
-      @vi[vs[n]] = n
+    @vs = vs
+    @vi = {v, n for n, v in ipairs vs}
   @vi
 SYM.slots = => @index! and #@vs
 SYM.edge  = (b) => @vs[b]
 SYM.slot  = (x) => x != "?" and @index![x] or nil
-
 
 -- ---- the histogram ------------------------------------------------
 clog = (c) -> c > 0 and c * log(c) or 0
@@ -326,7 +300,6 @@ TAB.cut = (rows, cols) =>
     hist col, rows, @kodeAt, @nk, offer
   bs and {col: bc, v: bv}
 
-
 -- ---- bayes ----------------------------------------------------------
 Nb = (tbl, rows) ->               -- NB; one sub-TAB per klass in `rows`
   i = new NB, {tbl: tbl, subs: {}, n: #rows, nKlass: 0}
@@ -348,10 +321,7 @@ NB.like = (sub, row, cols = sub.x) =>   -- num; log P(`row` | `sub:TAB`)
   prior + sum(cols, on)
 
 NB.klasses = =>                   -- list; `@subs`'s keys, sorted
-  ks = {}
-  for k in pairs @subs
-    ks[] = k
-  sort ks, (a, b) -> tostring(a) < tostring(b)
+  sort [k for k in pairs @subs], (a, b) -> tostring(a) < tostring(b)
 
 NB.guess = (row) =>               -- value; `row`'s likeliest klass
   local b, bk, v
@@ -372,11 +342,7 @@ NB.posts = (row) =>               -- dict; p(klass | `row`)
   for _, k in order ks
     t[k] = exp(t[k] - hi)
     z += t[k]
-  u = {}
-  for _, k in order ks
-    u[k] = t[k] / z
-  u
-
+  {k, t[k] / z for _, k in order ks}
 
 -- ---- tree -----------------------------------------------------------
 Tree = (tbl, rows=tbl.rows, lvl=1, cols=0) ->
@@ -413,7 +379,6 @@ TREE.cut = =>                     -- dict; the cut of `@rows` leaving
 TREE.sub = =>                     -- TAB; `@rows`, summarized, made once
   @subbed = @subbed or @tbl\clone(@rows)
   @subbed
-
 
 -- ---- asking ---------------------------------------------------------
 TREE.pick = (row) =>              -- TREE; leaf `row` falls into
@@ -462,7 +427,6 @@ TREE.dict = =>                    -- dict
     t.left, t.right = @left\dict!, @right\dict!
   t
 
-
 -- ---- predicting -----------------------------------------------------
 TREE.nb = =>                      -- NB; leaf's own naive Bayes, fitted
   @model = @model or Nb(@sub!, @rows)   -- the first time asked for
@@ -473,7 +437,6 @@ TREE.posts = (row) =>             -- dict; p(klass | `row`) off the leaf
   for k, m in pairs n.all.has
     t[k] = m / n.all.n
   t
-
 
 -- ---- forest ---------------------------------------------------------
 Forest = (tbl, rows=tbl.rows, rounds=the.rounds) ->
@@ -506,13 +469,10 @@ FOREST.guess = (row) =>           -- value; the most voted
     b, bk = t[k], k if t[k] > b   -- strict: first wins
   bk
 
-
 -- ---- acquire --------------------------------------------------------
 acquire = (tab, cap=the.budget - the.check, y=((r) -> tab\ydist r)) ->
   pool = shuffle map(tab.rows, same)   -- a copy, never `tab.rows`
-  todo = {}
-  for j = 1, min(the.few, #pool)
-    todo[] = pool[j]
+  todo = pool[, min(the.few, #pool)]
   both = tab\clone!
   for _ = 1, min(the.first, #todo)
     both\add table.remove(todo)
@@ -533,7 +493,6 @@ acquire = (tab, cap=the.budget - the.check, y=((r) -> tab\ydist r)) ->
 TAB.rank = (rows, best, rest) =>  -- list; `rows`, the good ones first
   bmid, rmid = best\mids!, rest\mids!
   sortBy rows, (z) -> @xdist(z, bmid) - @xdist(z, rmid)
-
 
 -- ---- misc -----------------------------------------------------------
 new = (meta, i) ->                -- connect instance `i` to class `meta`
@@ -565,16 +524,13 @@ shuffle = (t) ->                  -- `t`, Fisher-Yates shuffled in place
   t
 
 some = (t, n) ->
-  u = {}
-  for k = 1, n or #t
-    u[k] = t[rint(#t)]
-  u
+  [t[rint(#t)] for _ = 1, n or #t]
 
 Drawn = {}
 pick = (t, n) ->
   return t if not n or n == 0 or n >= #t
-  for k = 1, #t
-    Drawn[k] = t[k]
+  for k, v in ipairs t
+    Drawn[k] = v
   for k = #Drawn, #t + 1, -1      -- a shorter column list than last
     Drawn[k] = nil                -- time must not leave a tail
   shuffle Drawn
@@ -634,8 +590,7 @@ o = (x) ->                        -- str; `x` as text, fractions through
     return tostring(x == floor(x) and floor(x) or the.fmt\format(x))
   u = {}
   if #x > 0
-    for _, v in ipairs x
-      u[] = o(v)
+    u = [o(v) for v in *x]
   else
     for k, v in pairs x
       if k != "it" and type(v) != "function"
@@ -643,9 +598,7 @@ o = (x) ->                        -- str; `x` as text, fractions through
   "{" .. table.concat((#x > 0 and u or sort(u, lt)), " ") .. "}"
 
 print = (...): nil ->             -- print the lot, tab separated, via `o`
-  out = {}
-  for j = 1, select("#", ...)
-    out[j] = o((select(j, ...)))
+  out = [o((select(j, ...))) for j = 1, select("#", ...)]
   io.write table.concat(out, "\t"), "\n"
 
 fmt = (s, ...) -> s\format ...
@@ -672,7 +625,6 @@ about = (): nil ->
   print logfmt({date: os.date("%Y-%m-%d %H:%M:%S"),
                 version: the.version, cmd: cmd})
   print logfmt(the)
-
 
 -- ---- tests ----------------------------------------------------------
 eg, slow = {}, {}
@@ -749,9 +701,7 @@ eg["--acq"] = (): nil ->          -- where a budget of labels landed
   tr, te = tab\split!             -- acquire on the 80, rank the 20 it
   got, best, rest = acquire tab\clone tr        -- has never been shown
   held = tab\rank map(te, same), best, rest
-  top = {}
-  for j = 1, min(the.check, #held)
-    top[] = held[j]
+  top = held[, min(the.check, #held)]
   print logfmt {n: #got, acqBest: (mu got), acqMu: select(2, mu got),
                 top5: (mu top), heldBest: (mu te), heldMu: select(2, mu te)}
   ok (mu top), 0.1569024159
@@ -818,7 +768,6 @@ halves = ->                    -- TAB; `the.file` as train and test TABs
   tr, te = tbl\clone(tr), tbl\clone(te)
   y = (row) -> tr\ydist row
   tr, te, y
-
 
 -- ---- start ----------------------------------------------------------
 for k, v in help\gmatch("\n%s+(%a+)=(%S+)")

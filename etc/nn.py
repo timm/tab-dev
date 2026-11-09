@@ -7,6 +7,7 @@ that rmeans declines to label.
 
 usage: python3 ,/nn.py tabicl f.csv   (writes <cache>/<set>/tabicl.csv)
        python3 ,/nn.py tabpfn f.csv
+       LABELS=45 python3 ,/nn.py tabicl f.csv  (-> tabicl45.csv)
 """
 import os, sys, time, math
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -111,15 +112,33 @@ def main(who, file):
   # AUC=1 writes <who>auc.csv and leaves <who>.csv alone: the two are
   # different questions of the same model, not two versions of one.
   auc = bool(os.getenv("AUC"))
-  out = f"{home(file)}/{who}{'auc' if auc else ''}.csv"
+  # LABELS=n trains on the FIRST n training rows, exactly as lgbm.py
+  # does: `pair` here shares its seed and Park-Miller shuffle with
+  # tab.lua, so those n rows are the same rows `head1` hands tab's own
+  # learners, and the arms then differ by learner alone.  Writes
+  # <who><n>.csv -- tabicl45.csv -- and leaves <who>.csv alone.
+  lab = int(os.getenv("LABELS", 0))
+  out = f"{home(file)}/{who}{lab if lab else ''}{'auc' if auc else ''}.csv"
   if os.path.exists(out) and not os.getenv("FORCE"): print(out); return
   os.makedirs(home(file), exist_ok=True)
   t     = M.Tbl(file)
   wide  = len(t.cols.x) + len(t.cols.y)
-  if len(t.rows) * wide > Cap:    # it holds the training set in memory
-    print(f"{file}: {len(t.rows)}x{wide} = {len(t.rows)*wide:,} cells"
+  # Both caps exist because the model embeds the whole 80% and is
+  # quadratic in it.  LABELS=n hands it n rows instead, so n is what
+  # the caps have to be read against, not the file.  The test half
+  # still passes through, so the CELL cap counts context+test: a
+  # 785-column set is expensive to embed however few rows train it.
+  # The ROW cap is quadratic in the CONTEXT alone, and 45 rows is no
+  # context, so under LABELS it does not apply at all.  That is the
+  # point of the arm: it reaches every set, including the 28 the
+  # every-row arm cannot.
+  seen  = lab if lab else len(t.rows)
+  cells = (seen + (len(t.rows) - int(.8 * len(t.rows)))) * wide if lab \
+          else len(t.rows) * wide
+  if cells > Cap:
+    print(f"{file}: {seen}+test x{wide} = {cells:,} cells"
           f" over CAP={Cap:,}, skipped", file=sys.stderr); return
-  if len(t.rows) > Rows:          # and it is quadratic in the rows
+  if not lab and len(t.rows) > Rows:
     print(f"{file}: {len(t.rows)} rows over ROWS={Rows:,}, skipped",
           file=sys.stderr); return
   klass = klassOf(t, file)
@@ -131,6 +150,7 @@ def main(who, file):
   lines = []
   for s in range(1, Reps + 1):
     tr, te = pair(t, s)
+    if lab: tr = M.clone(t, tr.rows[:lab])
     i      = {}
     X1, y1 = xy(tr, i, klass, file)
     X2, y2 = xy(te, i, klass, file)
