@@ -57,26 +57,20 @@ csv = (file) ->                   -- rows; `rows` in a `file:str`
   rows
 
 -- ---- columns --------------------------------------------------------
-Col = (txt, at) ->                -- SYM | NUM; a-z Sym; A-Z Num
-  (txt\find("^%u") and Num or Sym)(txt, at)
+Col = (txt, at) -> (txt\find("^%u") and Num or Sym)(txt, at)
 
-Sym = (txt="S", at=0) ->          -- SYM; counts of symbols in column `at`
-  new SYM, {txt: txt, at: at, n: 0, has: {}, cl: 0}
+Sym = (txt="S", at=0) -> new SYM, {txt: txt, at: at, n: 0, has: {}, cl: 0}
 
 SYM.add = (v, inc=1): v =>        -- value; `inc` more of `v` (-1 = less)
   unless v == "?"
     @n += inc
     c = @has[v] or 0
-    @cl -= c * log(c) if c > 0
-    c += inc
-    if c <= 0
-      @has[v] = nil
-    else
-      @has[v] = c
-      @cl += c * log(c)
+    @cl -= c * log(c) if c > 0          -- take the old term out,
+    c += inc                            -- move, then put the new one
+    @has[v] = c > 0 and c or nil        -- back under the same guard
+    @cl += c * log(c) if c > 0
 
-SYM.div = =>                      -- num; entropy, in bits
-  @n < 1 and 0 or max(0, log(@n) - @cl / @n) / log(2)
+SYM.div = => @n < 1 and 0 or max(0, log(@n) - @cl / @n) / log(2)
 
 SYM.mid = =>                      -- value; the mode
   local bk                        -- `local`: assigned inside the loop
@@ -110,8 +104,7 @@ NUM.add = (v, inc=1): v =>        -- value; `inc` more of `v` (-1 takes it
 NUM.div = => @n < 2 and 0 or sqrt(max(@m2, 0) / (@n - 1))
 NUM.mid = => @mu                  -- num; the mean
 NUM.holds = (x, v) => x == "?" or x <= v  -- bool; "?" says yes, so a
-NUM.bin = (v) =>                  -- value; `v`'s bin, 1..`the.bins`
-  v == "?" and v or min the.bins, 1 + floor(the.bins * @norm(v))
+NUM.bin = (v) => v == "?" and v or min the.bins, 1+floor(the.bins*@norm(v))
 
 NUM.norm = (v) =>                 -- value; `v` on a logistic cdf,
   return v if v == "?"            -- clipped at three standard deviations
@@ -155,8 +148,7 @@ TAB.clone = (rows={}, how) =>     -- TAB; `rows` in a fresh TAB
       row
   Tab out
 
-TAB.mid = (cols) =>               -- dict; {name: middle}, for logfmt
-  {col.txt, col\mid! for _, col in order (cols or @cols)}
+TAB.mid = (cols) => {col.txt, col\mid! for _, col in order (cols or @cols)}
 
 TAB.ydist = (row) =>              -- num; `row`'s distance to heaven
   on = (col) ->
@@ -176,8 +168,7 @@ TAB.xdist = (r1, r2) =>           -- num; how far apart two rows are, on x
     abs(a - b) ^ the.p
   (sum(@x, on) / #@x) ^ (1 / the.p)
 
-TAB.mids = =>                     -- row; every column's middle, by `at`
-  {col.at, col\mid! for _, col in order @cols}
+TAB.mids = => {col.at, col\mid! for _, col in order @cols}
 
 TAB.split = =>                    -- rows,rows; 80:20, off a copy:
   rows = shuffle map(@rows, same) -- never @rows itself
@@ -185,108 +176,111 @@ TAB.split = =>                    -- rows,rows; 80:20, off a copy:
   rows[, n], rows[n + 1, ]
 
 -- ---- histogram cut ---------------------------------------------
-ThisC, ThatC, Hist = {}, {}, {}
+local binRows, hist   -- the only two names `TAB.cut` needs out of
+do
+  ThisC, ThatC, Hist = {}, {}, {}
 
--- ---- binning, on the column itself --------------------------------
-NUM.slots = => 2 * floor(the.cuts / 2) + 1
-NUM.edge  = (b) => @mu + (b - @hi - 0.5) * @r
-NUM.slot  = (x) =>                 -- nil when there is nothing to cut
-  unless @r
-    @hi = floor the.cuts / 2
-    @r  = 3 * @div! / @hi          -- so `hi` bins reach exactly 3sd
-  return nil if x == "?" or @r <= 0
-  b = floor((x - @mu) / @r + 0.5)  -- outliers pin to the end bins
-  (b < -@hi and -@hi or (b > @hi and @hi or b)) + @hi + 1
+  -- ---- binning, on the column itself --------------------------------
+  NUM.index = =>                     -- num; the bin width, set once
+    unless @r
+      @hi = floor the.cuts / 2
+      @r  = 3 * @div! / @hi          -- so `hi` bins reach exactly 3sd
+    @r
+  NUM.slots = => @index! and 2 * @hi + 1
+  NUM.edge  = (b) => @index! and @mu + (b - @hi - 0.5) * @r
+  NUM.slot  = (x) =>                 -- nil when there is nothing to cut
+    return nil if @index! <= 0 or x == "?"
+    b = floor((x - @mu) / @r + 0.5)  -- outliers pin to the end bins
+    min(@hi, max(-@hi, b)) + @hi + 1
 
-SYM.index = (    vs) =>
-  unless @vi
-    vs = [v for v in pairs @has]
-    sort vs, (a, b) -> tostring(a) < tostring(b)
-    @vs = vs
-    @vi = {v, n for n, v in ipairs vs}
-  @vi
-SYM.slots = => @index! and #@vs
-SYM.edge  = (b) => @vs[b]
-SYM.slot  = (x) => x != "?" and @index![x] or nil
+  SYM.index = (    vs) =>
+    unless @vi
+      vs = [v for v in pairs @has]
+      sort vs, (a, b) -> tostring(a) < tostring(b)
+      @vs = vs
+      @vi = {v, n for n, v in ipairs vs}
+    @vi
+  SYM.slots = => @index! and #@vs
+  SYM.edge  = (b) => @index! and @vs[b]
+  SYM.slot  = (x) => x != "?" and @index![x] or nil
 
--- ---- the histogram ------------------------------------------------
-clog = (c) -> c > 0 and c * log(c) or 0
+  -- ---- the histogram ------------------------------------------------
+  clog = (c) -> c > 0 and c * log(c) or 0
 
-ent = (n, cl) -> max 0, log(n) - cl / n
+  ent = (n, cl) -> max 0, log(n) - cl / n
 
-sc = (nn, tcl, on, ocl) ->
-  (ent(nn, tcl) * nn + ent(on, ocl) * on) / (log(2) * (nn + on))
+  sc = (nn, tcl, on, ocl) ->
+    (ent(nn, tcl) * nn + ent(on, ocl) * on) / (log(2) * (nn + on))
 
-binRows = (tbl): nil ->
-  return if tbl.binned
-  tbl.binned = true
-  off = #tbl.cols
-  for col in *tbl.x
-    col.binAt = off + col.at
+  binRows = (tbl): nil ->
+    return if tbl.binned
+    tbl.binned = true
+    off = #tbl.cols
+    for col in *tbl.x
+      col.binAt = off + col.at
+      for row in *tbl.rows
+        row[col.binAt] = col\slot row[col.at]
+    tbl.kodeAt, tbl.nk = off + tbl.klass.at, 0
+    seen = {}
     for row in *tbl.rows
-      row[col.binAt] = col\slot row[col.at]
-  tbl.kodeAt, tbl.kodes, tbl.nk = off + tbl.klass.at, {}, 0
-  seen = {}
-  for row in *tbl.rows
-    v = row[tbl.klass.at]
-    unless seen[v]
-      tbl.nk += 1
-      seen[v] = tbl.nk
-      tbl.kodes[tbl.nk] = v
-    row[tbl.kodeAt] = seen[v]
+      v = row[tbl.klass.at]
+      unless seen[v]
+        tbl.nk += 1
+        seen[v] = tbl.nk
+      row[tbl.kodeAt] = seen[v]
 
-tally = (col, rows, kat, nk, nb,    lo,up,nn,k,b,at) -> --> int,int,int
-  for k = 1, nb * nk
-    Hist[k] = 0
-  lo, up, nn = nb + 1, 0, 0
-  at = col.binAt
-  for _, row in order rows
-    b = row[at]
-    if b
-      Hist[(b - 1) * nk + row[kat]] += 1
-      lo, up, nn = min(lo, b), max(up, b), nn + 1
-  lo, up, nn
+  tally = (col, rows, kat, nk, nb,    lo,up,nn,k,b,at) -> --> int,int,int
+    for k = 1, nb * nk
+      Hist[k] = 0
+    lo, up, nn = nb + 1, 0, 0
+    at = col.binAt
+    for _, row in order rows
+      b = row[at]
+      if b
+        Hist[(b - 1) * nk + row[kat]] += 1
+        lo, up, nn = min(lo, b), max(up, b), nn + 1
+    lo, up, nn
 
-NUM.sweep = (nk, lo, up, nn, out,    on,tcl,ocl,b,i,c,a,z): nil =>
-  on, nn, tcl, ocl = nn, 0, 0, 0
-  for i = 1, nk                    -- `that` holds every row at first
-    ThisC[i], ThatC[i] = 0, 0
-    for b = lo, up
-      ThatC[i] += Hist[(b - 1) * nk + i]
-    ocl += clog ThatC[i]
-  for b = lo, up - 1               -- a cut after the last bin would
-    for i = 1, nk                  -- leave `that` empty
-      c = Hist[(b - 1) * nk + i]
-      continue if c == 0
-      a, z = clog(ThisC[i]), clog(ThisC[i] + c)
-      ThisC[i], tcl = ThisC[i] + c, tcl - a + z
-      a, z = clog(ThatC[i]), clog(ThatC[i] - c)
-      ThatC[i], ocl = ThatC[i] - c, ocl - a + z
-      nn, on = nn + c, on - c
-    continue if nn < the.leaf or on < the.leaf
-    out sc(nn, tcl, on, ocl), @edge b
+  NUM.sweep = (nk, lo, up, nn, out,    on,tcl,ocl,b,i,c,a,z): nil =>
+    on, nn, tcl, ocl = nn, 0, 0, 0
+    for i = 1, nk                    -- `that` holds every row at first
+      ThisC[i], ThatC[i] = 0, 0
+      for b = lo, up
+        ThatC[i] += Hist[(b - 1) * nk + i]
+      ocl += clog ThatC[i]
+    for b = lo, up - 1               -- a cut after the last bin would
+      for i = 1, nk                  -- leave `that` empty
+        c = Hist[(b - 1) * nk + i]
+        continue if c == 0
+        a, z = clog(ThisC[i]), clog(ThisC[i] + c)
+        ThisC[i], tcl = ThisC[i] + c, tcl - a + z
+        a, z = clog(ThatC[i]), clog(ThatC[i] - c)
+        ThatC[i], ocl = ThatC[i] - c, ocl - a + z
+        nn, on = nn + c, on - c
+      continue if nn < the.leaf or on < the.leaf
+      out sc(nn, tcl, on, ocl), @edge b
 
-SYM.sweep = (nk, lo, up, nn, out,    b,i,c,d,tn,on,tcl,ocl): nil =>
-  for i = 1, nk
-    ThatC[i] = 0
-    for b = lo, up
-      ThatC[i] += Hist[(b - 1) * nk + i]
-  for b = lo, up
-    tn, on, tcl, ocl = 0, 0, 0, 0
+  SYM.sweep = (nk, lo, up, nn, out,    b,i,c,d,tn,on,tcl,ocl): nil =>
     for i = 1, nk
-      c = Hist[(b - 1) * nk + i]
-      d = ThatC[i] - c
-      tn, tcl = tn + c, tcl + clog c
-      on, ocl = on + d, ocl + clog d
-    continue if tn < the.leaf or on < the.leaf
-    out sc(tn, tcl, on, ocl), @edge b
+      ThatC[i] = 0
+      for b = lo, up
+        ThatC[i] += Hist[(b - 1) * nk + i]
+    for b = lo, up
+      tn, on, tcl, ocl = 0, 0, 0, 0
+      for i = 1, nk
+        c = Hist[(b - 1) * nk + i]
+        d = ThatC[i] - c
+        tn, tcl = tn + c, tcl + clog c
+        on, ocl = on + d, ocl + clog d
+      continue if tn < the.leaf or on < the.leaf
+      out sc(tn, tcl, on, ocl), @edge b
 
-hist = (col, rows, kat, nk, out,    nb,lo,up,nn) -> --> nil
-  nb = col\slots!
-  return unless nb and nb > 1
-  lo, up, nn = tally col, rows, kat, nk, nb
-  return if nn < 2 * the.leaf or lo >= up
-  col\sweep nk, lo, up, nn, out
+  hist = (col, rows, kat, nk, out,    nb,lo,up,nn) -> --> nil
+    nb = col\slots!
+    return unless nb and nb > 1
+    lo, up, nn = tally col, rows, kat, nk, nb
+    return if nn < 2 * the.leaf or lo >= up
+    col\sweep nk, lo, up, nn, out
 
 TAB.cut = (rows, cols) =>
   local col1                      -- `local`: `offer` closes over it
@@ -373,8 +367,7 @@ TREE.grow = =>
       @right.txt = cut.col.txt .. " " .. op[2] .. " " .. o(cut.v)
   @
 
-TREE.cut = =>                     -- dict; the cut of `@rows` leaving
-  @tbl\cut(@rows, @cols)                   -- least klass entropy
+TREE.cut = => @tbl\cut(@rows, @cols)
 
 TREE.sub = =>                     -- TAB; `@rows`, summarized, made once
   @subbed = @subbed or @tbl\clone(@rows)
@@ -510,8 +503,7 @@ cli = ->                          -- dict; update `the` from the command
       the.file = s
   the
 
-seed = (n=the.seed): nil ->
-  rng = n
+seed = (n=the.seed): nil -> rng = n
 
 rint = (n) ->                     -- int in 1..`n`, repeatable from seed
   rng = (16807 * (rng or the.seed)) % 2147483647
@@ -523,8 +515,7 @@ shuffle = (t) ->                  -- `t`, Fisher-Yates shuffled in place
     t[k], t[j] = t[j], t[k]
   t
 
-some = (t, n) ->
-  [t[rint(#t)] for _ = 1, n or #t]
+some = (t, n) -> [t[rint(#t)] for _ = 1, n or #t]
 
 Drawn = {}
 pick = (t, n) ->
