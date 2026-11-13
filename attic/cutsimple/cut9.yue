@@ -1,0 +1,128 @@
+-- The 94, de-globaled onto the TABLE: one scratch buffer for the whole
+-- run, not one per column.
+--
+-- cut5 hung the buffers on each column, on the argument that per
+-- column is better sized -- `nb` is the column's own, so a shared
+-- array has to stay as wide as the widest.  Measured, that was wrong
+-- in the way that matters: sizing is not the cost, locality is.  One
+-- array reused by every column stays in cache; 279 arrays, one per
+-- column of `arrhythmia`, do not, and cut5 paid up to 2.78x on sets
+-- where the 94 was reusing a single hot buffer (`lymph`, `labor`,
+-- `coc1000`, `bank32nh`).
+--
+-- So: one buffer, on the table, grown to the widest column and
+-- cleared by the span the LAST call dirtied -- whichever column that
+-- was, because the layout `(b-1)*nk + i` is the same for all of them
+-- and `nk` is the table's.  That keeps the 94's locality AND drops
+-- its full-width clear, which is where a deep node's time goes: a
+-- four-row leaf pays all `nb*nk` cells in the original.
+--
+-- Threading it costs one parameter on `tally` and on each sweep.
+-- That is the whole price of the three globals.
+(tab) ->
+  {:the, :NUM, :SYM, :order, :pick} = tab
+  log, min, max = math.log, math.min, math.max
+
+  clog = (c) -> c > 0 and c * log(c) or 0
+  ent  = (n, cl) -> max 0, log(n) - cl / n
+  sc   = (nn, tcl, on, ocl) ->
+    (ent(nn, tcl) * nn + ent(on, ocl) * on) / (log(2) * (nn + on))
+
+  binRows = (tbl) ->
+    return if tbl.binned
+    tbl.binned = true
+    off = #tbl.cols
+    for col in *tbl.x
+      col.binAt = off + col.at
+      for row in *tbl.rows
+        row[col.binAt] = col\slot row[col.at]
+    tbl.kodeAt, tbl.nk = off + tbl.klass.at, 0
+    seen = {}
+    for row in *tbl.rows
+      v = row[tbl.klass.at]
+      unless seen[v]
+        tbl.nk += 1
+        seen[v] = tbl.nk
+      row[tbl.kodeAt] = seen[v]
+    return
+
+  -- `hn` is the shape the buffer was built for.  Checking it rather
+  -- than just `col.hist` means a column handed a table with a
+  -- different klass count rebuilds instead of indexing into a buffer
+  -- laid out for the old `nk` -- the one hazard a cleared-every-call
+  -- global did not have.
+  tally = (sx, col, rows, kat, nk, nb,    h,lo,up,nn,k,b,at) ->
+    h = sx.hist
+    for k = (sx.hn or 0) + 1, nb * nk   -- grow, never shrink
+      h[k] = 0
+    sx.hn = max sx.hn or 0, nb * nk
+    for k = sx.d1, sx.d2                -- the last call's span
+      h[k] = 0
+    lo, up, nn = nb + 1, 0, 0
+    at = col.binAt
+    for _, row in order rows
+      b = row[at]
+      if b
+        h[(b - 1) * nk + row[kat]] += 1
+        lo, up, nn = min(lo, b), max(up, b), nn + 1
+    sx.d1, sx.d2 = (lo - 1) * nk + 1, up * nk
+    lo, up, nn
+
+  NUM.sweep9 = (sx, nk, lo, up, nn, out,    h,tc,oc,on,tcl,ocl,b,i,c,a,z) =>
+    h, tc, oc = sx.hist, sx.thisC, sx.thatC
+    on, nn, tcl, ocl = nn, 0, 0, 0
+    for i = 1, nk
+      tc[i], oc[i] = 0, 0
+      for b = lo, up
+        oc[i] += h[(b - 1) * nk + i]
+      ocl += clog oc[i]
+    for b = lo, up - 1
+      for i = 1, nk
+        c = h[(b - 1) * nk + i]
+        continue if c == 0
+        a, z = clog(tc[i]), clog(tc[i] + c)
+        tc[i], tcl = tc[i] + c, tcl - a + z
+        a, z = clog(oc[i]), clog(oc[i] - c)
+        oc[i], ocl = oc[i] - c, ocl - a + z
+        nn, on = nn + c, on - c
+      continue if nn < the.leaf or on < the.leaf
+      out sc(nn, tcl, on, ocl), @edge b
+    return
+
+  SYM.sweep9 = (sx, nk, lo, up, nn, out,    h,oc,b,i,c,d,tn,on,tcl,ocl) =>
+    h, oc = sx.hist, sx.thatC
+    for i = 1, nk
+      oc[i] = 0
+      for b = lo, up
+        oc[i] += h[(b - 1) * nk + i]
+    for b = lo, up
+      tn, on, tcl, ocl = 0, 0, 0, 0
+      for i = 1, nk
+        c = h[(b - 1) * nk + i]
+        d = oc[i] - c
+        tn, tcl = tn + c, tcl + clog c
+        on, ocl = on + d, ocl + clog d
+      continue if tn < the.leaf or on < the.leaf
+      out sc(tn, tcl, on, ocl), @edge b
+    return
+
+  one = (sx, col, rows, kat, nk, out,    nb,lo,up,nn) ->
+    nb = col\slots!
+    return unless nb and nb > 1
+    lo, up, nn = tally sx, col, rows, kat, nk, nb
+    return if nn < 2 * the.leaf or lo >= up
+    col\sweep9 sx, nk, lo, up, nn, out
+    return
+
+  (rows, cols) =>
+    local col1
+    local bs, bc, bv
+    offer = (score, v) ->
+      if bs == nil or score < bs
+        bs, bc, bv = score, col1, v
+    binRows @
+    @sx or= {hist: {}, thisC: {}, thatC: {}, d1: 1, d2: 0}
+    for _, col in order pick(@x, cols)
+      col1 = col
+      one @sx, col, rows, @kodeAt, @nk, offer
+    bs and {col: bc, v: bv}

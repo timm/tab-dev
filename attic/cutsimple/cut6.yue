@@ -1,0 +1,93 @@
+-- cut4's shape -- one `Sym` per bin, `SYM.add` for the counts,
+-- `SYM.div` for the entropy -- with the allocation taken out.
+--
+-- `Sym!` is `new SYM, {... has: {}}`: two tables.  cut4 builds one
+-- per occupied bin per column per node, and a 51-bin column on a few
+-- thousand rows occupies most of its bins, so that is ~100 tables per
+-- column per node, thirty trees deep.  The bins are reused instead:
+-- they live on the column and are emptied, not rebuilt.  `SYM.add`
+-- already drops a count that reaches zero, so `has` only ever holds
+-- the klasses present and emptying it is O(klasses present).
+--
+-- No `used` list and no clear pass.  A bin carries the number of the
+-- call that last touched it; a bin whose stamp is stale IS empty, so
+-- the reset costs one compare on the row that first lands in a bin
+-- and nothing at all for the fifty bins this node never reaches.
+-- Both sweeps read the stamp in place of cut4's `h[b]` test.
+(tab) ->
+  {:the, :Sym, :NUM, :SYM, :order, :pick} = tab
+
+  -- Back to the empty `Sym`, `cl` to an exact 0 rather than whatever
+  -- subtracting the counts left -- so a reused bin starts as clean as
+  -- a fresh one and the arithmetic is cut4's, to the bit.
+  zap = (s) ->
+    s.n, s.cl = 0, 0
+    for k in pairs s.has
+      s.has[k] = nil
+    s
+
+  move = (src, dst, inc) ->       -- every count of `src`, in or out of
+    for v, c in pairs src.has     -- `dst`
+      dst\add v, inc * c
+
+  hist = (col, rows, kat,    hs,mark,gen,all,at,bat,b) -> -- the margin
+    hs, mark = col.hs, col.mark
+    gen = col.gen + 1
+    col.gen = gen
+    all = zap col.all
+    at, bat = col.at, col.binAt
+    for _, row in order rows
+      b = row[bat]
+      if b == nil                 -- memo, once a run: `false` stands
+        b = col\slot(row[at]) or false  -- for "this row has no bin"
+        row[bat] = b
+      continue unless b
+      unless mark[b] == gen       -- first row of this call in this bin
+        mark[b] = gen
+        hs[b] = hs[b] and zap(hs[b]) or Sym!
+      hs[b]\add row[kat]
+      all\add row[kat]
+    all
+
+  NUM.sweep6 = (that, out,    hs,mark,gen,this,b) =>
+    hs, mark, gen = @hs, @mark, @gen
+    this = zap @this              -- `this` grows: the histogram's cdf
+    for b = 1, @slots!
+      continue unless mark[b] == gen
+      move hs[b], this,  1
+      move hs[b], that, -1
+      out this, that, b
+    return
+
+  -- One buffer for every bin's complement, not one each.  That hands
+  -- `out` a `Sym` correct only until the next turn of the loop, which
+  -- is the hazard cut3 and cut4 were written to avoid -- and it is
+  -- the same bargain the 93 struck with its module-level buffers, so
+  -- it belongs in a version whose whole point is to pay cut4's clarity
+  -- cost down to the 93's speed.  The contract, since the signature
+  -- cannot say it: `out` reads what it is handed and keeps nothing.
+  SYM.sweep6 = (that, out,    hs,mark,gen,rest,b) =>
+    hs, mark, gen = @hs, @mark, @gen
+    rest = @rest
+    for b = 1, @slots!
+      continue unless mark[b] == gen
+      zap rest
+      move that, rest,  1
+      move hs[b], rest, -1
+      out hs[b], rest, b
+    return
+
+  (rows, cols) =>
+    local bs, bc, bv
+    for _, col in order pick(@x, cols)
+      continue unless (col\slots! or 0) > 1
+      col.binAt or= #@cols + col.at   -- past every real column
+      unless col.hs
+        col.hs, col.mark, col.gen = {}, {}, 0
+        col.all, col.this, col.rest = Sym!, Sym!, Sym!
+      col\sweep6 hist(col, rows, @klass.at), (this, that, b) ->
+        return if this.n < the.leaf or that.n < the.leaf
+        s = (this\div! * this.n + that\div! * that.n) / (this.n + that.n)
+        if bs == nil or s < bs    -- strict `<` keeps the FIRST of a tie
+          bs, bc, bv = s, col, col\edge b
+    bs and {col: bc, v: bv}

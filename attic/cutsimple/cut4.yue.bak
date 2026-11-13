@@ -1,0 +1,56 @@
+-- cut3, plus the one optimization in tab.yue:179-283 that really is a
+-- memo: a row's bin per column depends only on that column's `mu` and
+-- `div`, which are fixed for a run, so it is computed once and cached
+-- in the row.  `binRows`' whole eager pass becomes `or=`.  Everything
+-- else in the original is allocation avoidance, which no amount of
+-- auto-initialization can reach.
+(tab) ->
+  {:the, :Sym, :NUM, :SYM, :order, :pick} = tab
+
+  move = (src, dst, inc) ->       -- every count of `src`, in or out of
+    for v, c in pairs src.has     -- `dst`
+      dst\add v, inc * c
+
+  COL = {}                        -- NUM and SYM share the count pass
+  COL.hist = (rows, kat) =>       -- tab,Sym; bin -> Sym, and the margin
+    h, all = {}, Sym!
+    at, bat = @at, @binAt
+    for _, row in order rows
+      b = row[bat]
+      if b == nil                 -- memo, once a run: `false` stands
+        b = @slot(row[at]) or false    -- for "this row has no bin"
+        row[bat] = b
+      continue unless b
+      h[b] or= Sym!
+      h[b]\add row[kat]
+      all\add row[kat]
+    h, all
+  NUM.hist, SYM.hist = COL.hist, COL.hist
+
+  NUM.sweep2 = (h, that, out) =>  -- `this` grows: the histogram's cdf
+    this = Sym!
+    for b = 1, @slots!
+      continue unless h[b]
+      move h[b], this,  1
+      move h[b], that, -1
+      out this, that, b
+
+  SYM.sweep2 = (h, that, out) =>  -- `this` is one bin, so it goes back
+    for b = 1, @slots!            -- before the next one comes out
+      continue unless h[b]
+      move h[b], that, -1
+      out h[b], that, b
+      move h[b], that,  1
+
+  (rows, cols) =>
+    local bs, bc, bv
+    for _, col in order pick(@x, cols)
+      continue unless (col\slots! or 0) > 1
+      col.binAt or= #@cols + col.at   -- past every real column
+      h, all = col\hist rows, @klass.at
+      col\sweep2 h, all, (this, that, b) ->
+        return if this.n < the.leaf or that.n < the.leaf
+        s = (this\div! * this.n + that\div! * that.n) / (this.n + that.n)
+        if bs == nil or s < bs    -- strict `<` keeps the FIRST of a tie
+          bs, bc, bv = s, col, col\edge b
+    bs and {col: bc, v: bv}

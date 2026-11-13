@@ -7,7 +7,7 @@ by being run, not by being coded here.
 
 usage: python3 ,/charts.py [clas|labels|top5|secs ...]   (all, if none)
 """
-import os, sys, glob, json, statistics as st
+import os, sys, glob, json, textwrap, statistics as st
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import min as M
 from math import log, exp
@@ -74,7 +74,13 @@ Look = {
   "nb50":      ("#1f5f9e", "--", "D", "naive Bayes, 50 labels"),
   "nb72":      ("#0072B2", "--", "o", "naive Bayes (bins=7, m=2)"),
   "lgbm":      ("#D55E00", "--", "o", "LightGBM"),
-  "tabicl":    ("#860c4f", "--", "s", "TabICLv2"),
+  # One hue for the pair, and the dash carries the budget, exactly as
+  # `fornum45`/`fornumall` do: dashed = every row, solid = the 45
+  # labels the lua arms are allowed.  At a 45-row context TabICL's
+  # quadratic term all but vanishes, which is the only reason it can
+  # cover a whole corpus here at all.
+  "tabicl":    ("#860c4f", "--", "s", "TabICLv2, every row"),
+  "tabicl45":  ("#860c4f", "-",  "s", "TabICLv2, 45 labels"),
   "tabpfn":    ("#e7298a", "--", "^", "TabPFN-3"),
   "treemaj":   ("#d9661f", "-",  "o", "tree, majority at the leaf"),
   "treenb":    ("#6a3d9a", "-",  "s", "tree, naive Bayes at the leaf"),
@@ -124,7 +130,7 @@ Look = {
 # reader cannot see.  The legend carries both, so the two vocabularies
 # are tied together once, where the reader meets them.
 Short = {"nb": "bayes", "nb72": "bayes", "treedeep": "1tree",
-         "hardeep": "30tree", "lgbm": "lgbm", "tabicl": "tabicl",
+         "hardeep": "30tree", "lgbm": "lgbm", "tabicl": "tabicl", "tabicl45": "tabicl45",
          "tabpfn": "tabpfn", "treemaj": "1tree", "treenb": "1tree+nb",
          "fordeep": "30tree", "for60": "60tree", "rmeans": "rmeans",
          "rmeansall": "rmeans-all", "acq": "acquire", "lgbm45": "lgbm45", "fornum45": "forest45",
@@ -215,6 +221,13 @@ def cells(dir, who, col):
   f = f"{dir}/{who}.csv"
   if not os.path.exists(f): return None
   rows = [l.split(",") for l in open(f).read().splitlines() if l.strip()]
+  # An arm writes its header and then one line per rep, so a csv
+  # caught mid-run is short and a csv caught at `io.open` is empty.
+  # Empty used to raise IndexError here and kill the whole draw --
+  # a figure that cannot be drawn while any arm is running is a
+  # figure you can only draw by remembering not to.  Treat it as
+  # what it is: this arm has no numbers for this set yet.
+  if not rows: return None
   at   = rows[0].index(col) if col in rows[0] else None
   if at is None: return None
   try:    return [float(r[at]) for r in rows[1:]]
@@ -372,6 +385,21 @@ def fig(w=13, h=6):
   ax.grid(axis="y", color="#eeeeee", zorder=0)
   return f, ax
 
+def offscale(head, items, width=118):
+  """The "dropped off the axis" caption, wrapped to the canvas.
+
+  One `;  `-joined line was fine at two clipped points and ran off
+  both edges at five: `bbox_inches="tight"` grows the canvas for a
+  tall label but will not grow it sideways past the figure width, so
+  the names at each end were simply cut in half.  A caption that
+  names the dropped points and is itself unreadable drops them
+  twice.  Wrap on the separator, not mid-name.
+  """
+  if not items: return ""
+  body = textwrap.fill(";  ".join(items), width,
+                       break_long_words=False, break_on_hyphens=False)
+  return "\n" + head + "\n" + body
+
 def save(f, ax, name, title, xlab, ylab, rot=90, size=7, xax=None,
          pad=18, tight=True):
   # `xax`: the axes that owns the x axis, when it is not `ax`.  With
@@ -409,7 +437,7 @@ def mark(ax, names, which=None):
       t.set_color("#c0392b")
       t.set_fontweight("bold")
 
-def ranarms(need, extra=("tabicl", "tabpfn")):
+def ranarms(need, extra=("tabicl", "tabicl45", "tabpfn")):
   """NEED, plus whichever foundation models have actually run.
 
   Not `arms`: that name belongs to the figure below, and a figure
@@ -569,7 +597,23 @@ def sa(dir, who, kind, name):
 
 def labels(kind="regression", name="labels", vs="lgbm", logy=None,
            stdacc=False):
-  "Raw MAE on moot/regression: 45 labels against everyone's all."
+  """Standardised accuracy, every-row arms only, the pdpf shape.
+
+  The 45-label half of every pair is gone.  `top5reg`/`top5opt`
+  carry "45 labels reach every-row" on the measure that claim is
+  about -- an ORDER -- with three pairs instead of this figure's
+  two.  Six lines here were arguing it a second time, on an error
+  axis, and crowding out the question left over: among learners
+  that may read every row, which is most accurate?  One line per
+  family answers that.
+
+  Complete cases only, as `pdpf` does: a set is drawn when every
+  arm ran it.  That is not a free trim here and the x label says
+  so.  The every-row arms declined the big sets -- `fornumall`
+  33 of moot/optimize, median 10,000 rows -- so complete-casing
+  on them puts a ceiling on the corpus rather than thinning it
+  evenly, and the ceiling is the one place these arms are weak.
+  """
   # No `acq` here: it ranks without estimating y, so it has no mae
   # and no SA.  `acqtree` spends the SAME 45 rows `acq` picked but
   # reads them with a tree, which does predict y -- so the one arm of
@@ -579,10 +623,14 @@ def labels(kind="regression", name="labels", vs="lgbm", logy=None,
   # colours: `fornum45`, `fornumall`, `lgbm45`, `lgbm`.  The two
   # families then differ by exactly one arm each, and for a reason
   # the measure forces -- `acq` has no y estimate so it cannot carry
-  # an mae, and `tabicl` has no `win` column so it cannot carry a
-  # win.  Everything else is common, so a reader can carry a colour
-  # from one figure to the other.
-  who = ranarms(["fornum45", "fornumall", "lgbm45", "lgbm"])
+  # an mae.  `tabicl` used to be the other asymmetry here -- nn.py
+  # wrote no `win` column, so it could appear on an mae axis and not
+  # on a win one.  It writes one now, so both families carry the same
+  # TabICL pair and a reader can carry every colour from one figure
+  # to the other.
+  # Every-row arms only; `tabicl45` is excluded from the extras for
+  # the same reason `lgbm45` and `fornum45` are gone from the list.
+  who = ranarms(["fornumall", "lgbm"], extra=("tabicl", "tabpfn"))
   # Gate on arms that still exist; `acq`+`lgbm` select the identical
   # 59/128 sets the retired rmeans pair used to.
   S   = sets(kind, ["acq", "lgbm"])
@@ -593,16 +641,34 @@ def labels(kind="regression", name="labels", vs="lgbm", logy=None,
           for w in who} if stdacc else
          {w: {n: st.median(cells(d, w, "mae") or [float("nan")])
               for n, d in S} for w in who})
-  # Grey marks "no real difference from the 45-label arm".  That used
-  # to be `rmeans`, which this figure no longer draws -- a band whose
-  # meaning rests on an arm the reader cannot see is a band that
-  # cannot be checked -- so it is `fornum45` now, which is drawn.
+  # The gate, and the number the x label has to carry.  `drop` is kept
+  # around because "91 of 128" without "and the 37 were the big ones"
+  # is the same figure with the reason filed off.
+  full = [(n, d) for n, d in S if all(med[w][n] == med[w][n] for w in who)]
+  drop = [n for n, _ in S if n not in dict(full)]
+  total = len(S)
+  # "none over N", not "under N": the biggest kept set and the
+  # smallest dropped one are the SAME size on both corpora (10,000
+  # rows on optimize, 40,768 on regression), so sets of that size sit
+  # on both sides of the cut and "under" is false at the boundary.
+  # N is in training rows -- the units the x tick brackets are in --
+  # because a ceiling quoted in raw file rows next to brackets
+  # holding 80% of them is two scales in one sentence.
+  ceiling = int(.8 * max((rows(n, kind) for n, _ in full), default=0))
+  print(f"  {name}: kept {len(full)} of {len(S)}"
+        + (f", dropped {len(drop)} larger" if drop else ""))
+  S = full
+  # Grey marks "no real difference from the forest".  The rule the
+  # last two moves here both obeyed: the arm the band is defined on
+  # has to be ON the figure, or the reader cannot check the band.  It
+  # was `rmeans`, then `fornum45`; both have left, so it is
+  # `fornumall` -- the every-row forest, which is drawn.
   # Against lgbm the test is the three effect sizes; against anything
   # else it is MaeNear in raw mae units, and mind that mae spans six
   # orders of magnitude here, so one flat window is generous on the
   # small sets and strict on the large.
   def near(d):
-    a, b = cells(d, "fornum45", "mae"), cells(d, vs, "mae")
+    a, b = cells(d, "fornumall", "mae"), cells(d, vs, "mae")
     if not a or not b: return False
     if vs == "lgbm":   return M.same(a, b)
     return abs(st.median(a) - st.median(b)) <= MaeNear
@@ -616,7 +682,8 @@ def labels(kind="regression", name="labels", vs="lgbm", logy=None,
   # those go right rather than wherever NaN happens to fall.
   Sortby = os.getenv("SORTBY", "lgbm")
   if Sortby not in med or not any(v == v for v in med[Sortby].values()):
-    Sortby = "rmeans"
+    Sortby = "lgbm"      # drawn here; `rmeans` was not, and a figure
+                         # sorted by an invisible arm cannot be checked
   flip = -1 if stdacc else 1          # SA: higher is better
   S.sort(key=lambda nd: (med[Sortby][nd[0]] != med[Sortby][nd[0]],
                          flip * med[Sortby][nd[0]]))
@@ -641,6 +708,14 @@ def labels(kind="regression", name="labels", vs="lgbm", logy=None,
     ys = [med[w][n] for n in names]
     if not any(y == y for y in ys): continue   # not run yet: no legend line
     c, ls, mk, lab = Look[w]
+    # An arm that declined some sets draws a line with gaps in it.  The
+    # gaps are visible but not countable, and a mean read off a short
+    # line is not the mean the title claims.  So the legend says how
+    # many of THIS figure's sets the arm actually ran, exactly as
+    # `profile` has carried its own `n=` all along -- the two figures
+    # are meant to be read side by side.
+    k = sum(1 for y in ys if y == y)
+    if k < len(names): lab = f"{lab}  (n={k} of {len(names)})"
     ax.plot(range(len(names)), ys, ls, color=c, marker=mk, ms=2.5, lw=1.6,
             label=lab, zorder=3)
   # Log only where the y really spans decades.  moot/regression is raw
@@ -665,8 +740,8 @@ def labels(kind="regression", name="labels", vs="lgbm", logy=None,
     low = sorted((med[w][n], Look[w][3], n) for w in who for n in names
                  if med[w][n] == med[w][n] and med[w][n] < 0)
     if low:
-      note = ("\nthe axis starts at 0; worse than guessing, off scale:  "
-              + ";  ".join(f"{lab} {n} {v:+.2f}" for v, lab, n in low))
+      note = offscale("the axis starts at 0; worse than guessing, off scale:",
+                      [f"{lab} {n} {v:+.2f}" for v, lab, n in low])
   elif logy: ax.set_yscale("log")
   xa.set_xticks(range(len(names)))
   xa.set_xticklabels([f"{n} ({int(.8*rows(n,kind))})"
@@ -692,7 +767,7 @@ def labels(kind="regression", name="labels", vs="lgbm", logy=None,
     # The pair the grey columns already test, so the strip answers the
     # question the shading raises: is that gap bigger than the noise?
     def pooled(n,    u=None, v=None):
-      u = sas(dirof[n], "fornum45", kind, n)
+      u = sas(dirof[n], "fornumall", kind, n)
       v = sas(dirof[n], vs, kind, n)
       if not u or not v: return None
       return ((((len(u)-1) * st.pstdev(u)**2
@@ -702,21 +777,63 @@ def labels(kind="regression", name="labels", vs="lgbm", logy=None,
     if any(sds):
       okd = [x for x in sds if x]
       sdstrip(sx, names, sds,
-              f"of {Look['fornum45'][3]} and {Look[vs][3]}, in SA",
+              f"of {Look['fornumall'][3]} and {Look[vs][3]}, in SA",
               cap=4 * st.median(okd))
   save(f, ax, name,
        ("Standardised accuracy: how far past random guessing?"
         f"   [moot/{kind}]") if stdacc else
        "rmeans on 45 labels vs every row of the 80% split,"
        " against LightGBM",
-       f"{len(names)} moot/{kind} sets (training rows available),"
-       f" sorted by {Look[Sortby][3]}" + note,
+       (f"{len(names)} of {total} moot/{kind} sets (training rows"
+        f" available), none over {ceiling:,}"
+        if drop else f"{len(names)} moot/{kind} sets (training rows"
+                     f" available)")
+       + f", sorted by {Look[Sortby][3]}" + note,
        "SA = 1 - MAR(arm) / MAR(random guess)\n"
        "(1 = perfect, 0 = no better than guessing)" if stdacc else
        "raw MAE, median of 20 seeds" + ("  (log)" if logy else ""),
        xax=sx, pad=30 if stdacc else 18, tight=sx is None)
 
-def profile(kind="optimize", name="prof", col="rank"):
+def ran(kind, arms, col, S=None):
+  "The sets where EVERY one of `arms` has a `col` number."
+  return {n for n, d in (S if S is not None else sets(kind, ["acq", "lgbm"]))
+          if all(cells(d, a, col) for a in arms)}
+
+def winsplit(kind="optimize"):
+  """`win` on two disjoint gates, because one arm declined most sets.
+
+  Every-row TabICL has `win` on 21 of 128 optimize sets, so ONE
+  complete-case figure over every arm is drawn on 19 and one partial
+  figure asks a reader to compare curves of different length on an
+  axis that rescales each of them to the same 0..100.  Neither is
+  honest.  Split the corpus instead:
+
+    <name>icl  the sets where every arm ran, every-row TabICL too
+    <name>     the rest, without the arm that did not run them
+
+  Disjoint by construction, so neither figure borrows the other's n,
+  and the two n's add up to a number the reader can check against the
+  corpus.  The sets outside both are the ones some OTHER arm is still
+  missing -- named in each caption rather than quietly dropped.
+  """
+  tag  = {"optimize": "opt", "regression": "reg"}[kind]
+  full = ranarms(["acq", "fornum45", "fornumall", "lgbm45", "lgbm"])
+  part = [a for a in full if a != "tabicl"]
+  S    = sets(kind, ["acq", "lgbm"])
+  A    = ran(kind, full, "win", S)
+  B    = ran(kind, part, "win", S) - A
+  out  = len(S) - len(A) - len(B)
+  gap  = f";  {out} more wait on another arm" if out else ""
+  profile(kind, f"win{tag}icl", "win", arms=full, only=A,
+          sub=f"the {len(A)} sets every arm ran, every-row TabICL included"
+              f"   ({len(S)} in the corpus{gap})")
+  profile(kind, f"win{tag}", "win", arms=part, only=B,
+          sub=f"the other {len(B)} sets, drawn without every-row TabICL"
+              f"   (it ran {len(A)} of {len(S)}; those are the companion"
+              " figure)")
+
+def profile(kind="optimize", name="prof", col="rank",
+            arms=None, only=None, sub=""):
   """Each arm's own values, sorted: a performance profile.
 
   `top5` draws one x position per set, so five lines cross each other
@@ -733,7 +850,10 @@ def profile(kind="optimize", name="prof", col="rank"):
   # That is a result to write down, not a sixth line to carry on a
   # chart about what a label budget can reach.  `tab-eg.lua grab` and
   # its cached csvs stay, so the comparison re-runs whenever asked.
-  who = ranarms((["acq", "fornum45",
+  # `arms` overrides, so a caller can draw the same measure on two
+  # gates with two arm lists -- see `winsplit`.  Left alone, the old
+  # behaviour: every arm that has run.
+  who = arms or ranarms((["acq", "fornum45",
                   "fornumall", "lgbm45", "lgbm"] if col == "win" else
                  ["rmeans", "rmeansall", "acq", "fornum45",
                   "fornumall", "lgbm45", "lgbm"]))
@@ -742,6 +862,12 @@ def profile(kind="optimize", name="prof", col="rank"):
   # one can re-run is a gate that only works until the cache is
   # cleaned.  `acq`+`lgbm` select the identical 59/128 sets.
   S   = sets(kind, ["acq", "lgbm"])
+  # `only`: draw a named subset of the corpus.  A profile sorts each
+  # arm on its own values, so a shorter arm still spans the whole x
+  # axis -- which is exactly why a figure whose arms ran different
+  # sets cannot be read off the x axis at all.  Handing in one
+  # complete-case gate per figure is the fix.
+  if only is not None: S = [(n, d) for n, d in S if n in only]
   # Keep the reps, not just their median: the strip under `win` needs
   # the spread WITHIN a set, which a median has already thrown away.
   raw = {w: {n: (cells(d, w, col) or []) for n, d in S} for w in who}
@@ -790,7 +916,12 @@ def profile(kind="optimize", name="prof", col="rank"):
   # `acquire` have their own hues and no twin, so a dash on them said
   # nothing and only made the chart busier.  Solid unless the arm has
   # a same-hue sibling to be told apart from.
-  Thin = {"fornumall", "lgbm"}    # the every-row half of a hue pair
+  # The every-row half of a hue pair.  This figure sets the dash
+  # itself rather than reading `Look`, so an arm that gains a
+  # same-hue sibling has to be added HERE too -- `tabicl` drew
+  # solid beside `tabicl45` in the same dark red, two lines told
+  # apart only by the order of the legend.
+  Thin = {"fornumall", "lgbm", "tabicl"}
   for w in who:
     v = sorted((x for x in med[w].values() if x == x), reverse=up)
     if len(v) < 2: continue
@@ -836,7 +967,7 @@ def profile(kind="optimize", name="prof", col="rank"):
     sx.set_ylabel("sd of the\n20 reps", fontsize=9.5)
   save(f, ax, name,
        "Best row found by labelling the top 5 guesses"
-       f"   [moot/{kind}]",
+       f"   [moot/{kind}]" + (f"\n{sub}" if sub else ""),
        "percent of data sets, each arm sorted on its own result",
        ("percent of the average-to-best gap closed\n"
         "(100 = the best row, 0 = an average one)"
@@ -1253,9 +1384,9 @@ def auc():
                if has(w, n) and med[w][n] < Floor)
   note = ""
   if low:
-    note = ("\nthe axis starts at {:g}; below it, off scale:  "
-            .format(Floor)
-            + ";  ".join(f"{lab} {n} {v:.2f}" for v, lab, n in low))
+    note = offscale("the axis starts at {:g}; below it, off scale:"
+                    .format(Floor),
+                    [f"{lab} {n} {v:.2f}" for v, lab, n in low])
   for lo, hi in zip([0] + edge, edge + [len(names)]):
     lab = Band[grp[names[lo]]]
     if hi > lo:
@@ -1605,11 +1736,18 @@ def rawnum():
   # covers everything `rawclas` drew, which is why that one is in
   # docs/attic -- minus `treedeep`, which `auc` and `pdpf` no longer
   # draw either, so the klass arms are the same four everywhere.
+  # `tabicl45` is on the two numeric panels and not on classify: it
+  # is the 45-label budget, which only the numeric tasks define, and
+  # it has no cached classify secs to draw.  It belongs here because
+  # it is the arm that actually covers those two corpora -- a cost
+  # figure that omits the arm carrying most of the scoring, while
+  # claiming the same arm list as win and labels, is the one place a
+  # reader could conclude TabICL is unaffordable at any budget.
   Panel = (("classify",   ["nb", "hardhist", "lgbm", "tabicl"]),
            ("regression", ["acq", "fornum45", "fornumall", "lgbm45",
-                           "lgbm", "tabicl"]),
+                           "lgbm", "tabicl", "tabicl45"]),
            ("optimize",   ["acq", "fornum45", "fornumall", "lgbm45",
-                           "lgbm", "tabicl"]))
+                           "lgbm", "tabicl", "tabicl45"]))
   f, ax = plt.subplots(1, 3, figsize=(18, 6.4), dpi=200, sharey=True)
   for k, (kind, who) in enumerate(Panel):
     a, cur = ax[k], {w: [] for w in who}
@@ -1722,8 +1860,8 @@ if __name__ == "__main__":
            "top5opt":   lambda: top5("optimize", "top5opt"),
            "profopt":   lambda: profile("optimize", "profopt"),
            "profreg":   lambda: profile("regression", "profreg"),
-           "winopt":    lambda: profile("optimize", "winopt", "win"),
-           "winreg":    lambda: profile("regression", "winreg", "win")}
+           "winopt":    lambda: winsplit("optimize"),
+           "winreg":    lambda: winsplit("regression")}
   # `top5`, `labels` and `arms` are off the default list and their pngs live in
   # docs/attic: `top5reg`/`top5opt` carry the same question with the
   # arms that came later, and every arm and measure `arms` drew is in

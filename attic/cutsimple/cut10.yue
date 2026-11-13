@@ -1,0 +1,107 @@
+-- cut8 (one sweep, no incremental carry, nothing written into tab's
+-- NUM and SYM) with its buffers moved from the columns onto the
+-- TABLE, for the reason cut9 carries: one array every column reuses
+-- stays in cache, and one array per column does not.
+--
+-- This isolates cut8's remaining cost.  If the single buffer closes
+-- the gap, cut8 was paying locality; if it does not, the gap is the
+-- `2*nk` logs it takes per bin whether or not those cells hold
+-- anything -- which is the thing the 94's incremental carry exists to
+-- avoid, and the thing that cost cut8 its second sweep.
+(tab) ->
+  {:the, :NUM, :order, :pick} = tab
+  log, min, max = math.log, math.min, math.max
+
+  clog = (c) -> c > 0 and c * log(c) or 0
+
+  -- Weighted entropy of the split `tc` | `oc`, in bits; nil when
+  -- either side is too small to keep.  `n*ent = n*log n - cl`, so the
+  -- division `ent` would do per side never happens.
+  score = (tc, oc, nk,    tn,on,tcl,ocl,i,c) ->
+    tn, on, tcl, ocl = 0, 0, 0, 0
+    for i = 1, nk
+      c = tc[i]
+      tn, tcl = tn + c, tcl + clog c
+      c = oc[i]
+      on, ocl = on + c, ocl + clog c
+    return nil if tn < the.leaf or on < the.leaf
+    (max(0, log(tn) * tn - tcl) + max(0, log(on) * on - ocl)) /
+      (log(2) * (tn + on))
+
+  binRows = (tbl) ->
+    return if tbl.binned
+    tbl.binned = true
+    off = #tbl.cols
+    for col in *tbl.x
+      col.binAt = off + col.at
+      for row in *tbl.rows
+        row[col.binAt] = col\slot row[col.at]
+    tbl.kodeAt, tbl.nk = off + tbl.klass.at, 0
+    seen = {}
+    for row in *tbl.rows
+      v = row[tbl.klass.at]
+      unless seen[v]
+        tbl.nk += 1
+        seen[v] = tbl.nk
+      row[tbl.kodeAt] = seen[v]
+    return
+
+  -- Count `rows` into (bin x klass) and report the occupied span.
+  -- Buffers hang off the column -- `nb` is the column's own, so one
+  -- shared array would have to stay as wide as the widest column --
+  -- and only the span the LAST call dirtied is cleared, because every
+  -- cell outside every span has never been written.  `hn` is the
+  -- shape it was built for, so a different klass count rebuilds.
+  tally = (sx, col, rows, kat, nk, nb,    h,lo,up,nn,k,b,at) ->
+    h = sx.hist
+    for k = (sx.hn or 0) + 1, nb * nk     -- grow, never shrink
+      h[k] = 0
+    sx.hn = max sx.hn or 0, nb * nk
+    for k = sx.d1, sx.d2                  -- the last call's span
+      h[k] = 0
+    lo, up, nn = nb + 1, 0, 0
+    at = col.binAt
+    for _, row in order rows
+      b = row[at]
+      if b
+        h[(b - 1) * nk + row[kat]] += 1
+        lo, up, nn = min(lo, b), max(up, b), nn + 1
+    sx.d1, sx.d2 = (lo - 1) * nk + 1, up * nk
+    lo, up, nn
+
+  -- `grow`: a numeric cut is `x <= edge`, so `this` is the cdf and
+  -- keeps what the last bin put in it, and the last bin is no cut at
+  -- all (it would leave `that` empty).  A symbolic cut is `x == v`,
+  -- so `this` is the one bin and every bin is a candidate.
+  sweep = (sx, col, nk, lo, up, out, grow,    h,tc,oc,mc,b,i,s) ->
+    h, tc, oc, mc = sx.hist, sx.thisC, sx.thatC, sx.margC
+    for i = 1, nk
+      tc[i], mc[i] = 0, 0
+      for b = lo, up
+        mc[i] += h[(b - 1) * nk + i]
+    for b = lo, (grow and up - 1 or up)
+      if grow
+        for i = 1, nk
+          tc[i] += h[(b - 1) * nk + i]
+          oc[i] = mc[i] - tc[i]
+      else
+        for i = 1, nk
+          tc[i] = h[(b - 1) * nk + i]
+          oc[i] = mc[i] - tc[i]
+      s = score tc, oc, nk
+      out s, col\edge b if s
+    return
+
+  (rows, cols) =>
+    local bs, bc, bv
+    binRows @
+    @sx or= {hist: {}, thisC: {}, thatC: {}, margC: {}, d1: 1, d2: 0}
+    for _, col in order pick(@x, cols)
+      nb = col\slots!
+      continue unless nb and nb > 1
+      lo, up, nn = tally @sx, col, rows, @kodeAt, @nk, nb
+      continue if nn < 2 * the.leaf or lo >= up
+      sweep @sx, col, @nk, lo, up, ((s, v) ->
+        if bs == nil or s < bs    -- strict `<` keeps the FIRST of a tie
+          bs, bc, bv = s, col, v), col.it == NUM
+    bs and {col: bc, v: bv}

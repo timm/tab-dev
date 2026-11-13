@@ -1,0 +1,67 @@
+-- The histogram cut, written from its own description: a column's
+-- class histogram is one `Sym` per bin, so `SYM.add` keeps the counts
+-- and `SYM.div` is the entropy.  Numerics accumulate (`x <= edge`),
+-- symbolics stand alone (`x == v`), and the other side is always the
+-- margin with this side taken out.  Nothing is reused between calls:
+-- this is the unoptimized reading of tab.yue:179-283.
+(tab) ->
+  {:the, :Sym, :NUM, :SYM, :order, :pick} = tab
+
+  move = (src, dst, inc) ->       -- every count of `src`, in or out of
+    for v, c in pairs src.has     -- `dst`
+      dst\add v, inc * c
+
+  -- A local, not a method on both metatables: the count pass is the
+  -- SAME for a numeric and a symbolic column -- `slot` already did
+  -- the only thing that differs -- so installing it twice bought a
+  -- dispatch that never dispatches, and did it by writing into
+  -- tab's shared NUM and SYM.  `sweep2` below is a method because
+  -- it genuinely has two bodies.
+  hist = (col, rows, kat) ->      -- bin -> Sym, and the margin
+    h, all = {}, Sym!
+    for _, row in order rows
+      b = col\slot row[col.at]
+      continue unless b
+      h[b] or= Sym!
+      h[b]\add row[kat]
+      all\add row[kat]
+    h, all
+
+  NUM.sweep2 = (h, that, out) =>  -- `this` grows: the histogram's cdf
+    this = Sym!
+    for b = 1, @slots!
+      continue unless h[b]
+      move h[b], this,  1
+      move h[b], that, -1
+      out this, that, b
+
+  -- `this` is one bin, so `that` is the margin with that bin taken
+  -- out.  Taking it out of the shared `all` and putting it back
+  -- around the callback is one allocation cheaper and was measured
+  -- exact (counts restored, `cl` drifting 1.7e-16 over 300 bins) --
+  -- but it hands `out` a `Sym` that is only correct until the next
+  -- line runs.  A callback that keeps the reference instead of
+  -- reading it, or one that errors mid-sweep, gets silent nonsense
+  -- and no warning.  `NUM.sweep2` never rewinds, so it does not
+  -- share the hazard; this one did, and nothing in the signature
+  -- said so.  Build the side instead: `out` owns what it is given.
+  SYM.sweep2 = (h, that, out) =>
+    for b = 1, @slots!
+      continue unless h[b]
+      rest = Sym!
+      move that, rest,  1
+      move h[b], rest, -1
+      out h[b], rest, b
+
+  (rows, cols) =>
+    local bs, bc, bv
+    for _, col in order pick(@x, cols)
+      continue unless (col\slots! or 0) > 1
+      h, all = hist col, rows, @klass.at   -- two returns: bind, do not
+      col\sweep2 h, all, (this, that, b) ->  -- inline (only the last
+
+        return if this.n < the.leaf or that.n < the.leaf
+        s = (this\div! * this.n + that\div! * that.n) / (this.n + that.n)
+        if bs == nil or s < bs    -- strict `<` keeps the FIRST of a tie
+          bs, bc, bv = s, col, col\edge b
+    bs and {col: bc, v: bv}

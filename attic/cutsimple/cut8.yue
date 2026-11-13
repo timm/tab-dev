@@ -1,0 +1,121 @@
+-- The dense histogram, with the incremental `cl` carry dropped.
+--
+-- The 94 keeps `sum c*log c` up to date as counts move, which costs
+-- four logs per changed cell and buys the per-bin score for nothing.
+-- It also costs the two sweeps their shared shape: carrying a running
+-- float means NUM walks forward and SYM cannot, so they became two
+-- bodies, 34 lines, each with its own copy of the margin pass, and
+-- the order of the additions is load-bearing (the comment at
+-- tab.yue:315 says so, and it is right).
+--
+-- Here the counts move with plain adds and the logs are taken once
+-- per bin over `nk` klasses.  That makes the arithmetic the same for
+-- both kinds, so there is ONE sweep, a local function, and nothing is
+-- installed on tab's shared NUM and SYM at all.  The two kinds differ
+-- by one line: a numeric bin ACCUMULATES into `this` (a cdf, cut is
+-- `x <= edge`), a symbolic bin REPLACES it (cut is `x == v`).  The
+-- other side is the margin minus this side, which is why one count
+-- array and one margin array are enough.
+--
+-- What it trades: logs per bin are `2*nk` whether or not those cells
+-- hold anything, where the carry paid only for cells that changed.
+-- Dense and few-klass is a wash; 48 klasses over 51 bins is where
+-- this should lose.  That is the measurement, not a prediction.
+(tab) ->
+  {:the, :NUM, :order, :pick} = tab
+  log, min, max = math.log, math.min, math.max
+
+  clog = (c) -> c > 0 and c * log(c) or 0
+
+  -- Weighted entropy of the split `tc` | `oc`, in bits; nil when
+  -- either side is too small to keep.  `n*ent = n*log n - cl`, so the
+  -- division `ent` would do per side never happens.
+  score = (tc, oc, nk,    tn,on,tcl,ocl,i,c) ->
+    tn, on, tcl, ocl = 0, 0, 0, 0
+    for i = 1, nk
+      c = tc[i]
+      tn, tcl = tn + c, tcl + clog c
+      c = oc[i]
+      on, ocl = on + c, ocl + clog c
+    return nil if tn < the.leaf or on < the.leaf
+    (max(0, log(tn) * tn - tcl) + max(0, log(on) * on - ocl)) /
+      (log(2) * (tn + on))
+
+  binRows = (tbl) ->
+    return if tbl.binned
+    tbl.binned = true
+    off = #tbl.cols
+    for col in *tbl.x
+      col.binAt = off + col.at
+      for row in *tbl.rows
+        row[col.binAt] = col\slot row[col.at]
+    tbl.kodeAt, tbl.nk = off + tbl.klass.at, 0
+    seen = {}
+    for row in *tbl.rows
+      v = row[tbl.klass.at]
+      unless seen[v]
+        tbl.nk += 1
+        seen[v] = tbl.nk
+      row[tbl.kodeAt] = seen[v]
+    return
+
+  -- Count `rows` into (bin x klass) and report the occupied span.
+  -- Buffers hang off the column -- `nb` is the column's own, so one
+  -- shared array would have to stay as wide as the widest column --
+  -- and only the span the LAST call dirtied is cleared, because every
+  -- cell outside every span has never been written.  `hn` is the
+  -- shape it was built for, so a different klass count rebuilds.
+  tally = (col, rows, kat, nk, nb,    h,lo,up,nn,k,b,at) ->
+    if col.hn != nb * nk
+      col.hist, col.thisC, col.thatC, col.margC = {}, {}, {}, {}
+      for k = 1, nb * nk
+        col.hist[k] = 0
+      col.hn, col.d1, col.d2 = nb * nk, 1, 0
+    h = col.hist
+    for k = col.d1, col.d2
+      h[k] = 0
+    lo, up, nn = nb + 1, 0, 0
+    at = col.binAt
+    for _, row in order rows
+      b = row[at]
+      if b
+        h[(b - 1) * nk + row[kat]] += 1
+        lo, up, nn = min(lo, b), max(up, b), nn + 1
+    col.d1, col.d2 = (lo - 1) * nk + 1, up * nk
+    lo, up, nn
+
+  -- `grow`: a numeric cut is `x <= edge`, so `this` is the cdf and
+  -- keeps what the last bin put in it, and the last bin is no cut at
+  -- all (it would leave `that` empty).  A symbolic cut is `x == v`,
+  -- so `this` is the one bin and every bin is a candidate.
+  sweep = (col, nk, lo, up, out, grow,    h,tc,oc,mc,b,i,s) ->
+    h, tc, oc, mc = col.hist, col.thisC, col.thatC, col.margC
+    for i = 1, nk
+      tc[i], mc[i] = 0, 0
+      for b = lo, up
+        mc[i] += h[(b - 1) * nk + i]
+    for b = lo, (grow and up - 1 or up)
+      if grow
+        for i = 1, nk
+          tc[i] += h[(b - 1) * nk + i]
+          oc[i] = mc[i] - tc[i]
+      else
+        for i = 1, nk
+          tc[i] = h[(b - 1) * nk + i]
+          oc[i] = mc[i] - tc[i]
+      s = score tc, oc, nk
+      out s, col\edge b if s
+    return
+
+  (rows, cols) =>
+    local bs, bc, bv
+    binRows @
+    for _, col in order pick(@x, cols)
+      nb = col\slots!
+      continue unless nb and nb > 1
+      lo, up, nn = tally col, rows, @kodeAt, @nk, nb
+      continue if nn < 2 * the.leaf or lo >= up
+      sweep col, @nk, lo, up, ((s, v) ->
+        if bs == nil or s < bs    -- strict `<` keeps the FIRST of a tie
+          bs, bc, bv = s, col, v), col.it == NUM
+    bs and {col: bc, v: bv}
