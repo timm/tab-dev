@@ -1876,7 +1876,12 @@ if __name__ == "__main__":
   # thing.  That is older than this list -- clas.png on disk is from
   # 2026-11-04 and predates whoever added the third column -- and it
   # is a figure to repair, not a job to keep crashing a bare run.
+  # `rawnum` is NOT here either, retired 2026-11-14 to docs/attic.  Its
+  # seconds stack three defects that all flatter tab: `os.clock` (cpu)
+  # for the lua arms against `time.time` (wall) for LightGBM, one
+  # thread against ten, and a `-P 8` harness that costs the threaded
+  # arm about 2.3x more than the other.  Redrawing it from the same
+  # caches repairs none of them.
   jobs = sys.argv[1:] or ["auc", "pdpf",
-                          "labelsreg", "labelsopt", "winreg", "winopt",
-                          "rawnum"]
+                          "labelsreg", "labelsopt", "winreg", "winopt"]
   for j in jobs: (extra.get(j) or globals()[j])()

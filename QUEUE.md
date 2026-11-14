@@ -9,7 +9,9 @@ and nothing heavy shares the box with them.
 - job 2 (40 sets, `FORCE=1`): TabICL `win` + serial `secs`
 - job 3 (7 never-run sets, `ROWS=50000`)
 - then promote both into `cache/`, redraw
-  `winreg winopt labelsreg labelsopt rawnum`
+  `winreg winopt labelsreg labelsopt`
+  (`rawnum` retired 2026-11-14, see CLAUDE.md: serial TabICL `secs`
+  beside `-P 8` seconds for every other arm is not a figure)
 
 `fornumall` stays at 67 of 128 optimize sets by decision.  Those 67 are
 the SMALL half -- 81/1343/17737 rows against 10000/10000/166975 for the

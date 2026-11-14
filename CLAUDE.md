@@ -286,6 +286,19 @@ Settle this before citing either number.
   stop putting seconds on a figure whose three curves were each
   measured a different way. `auc.png` and `pdpf.png` read no `secs`
   and are unaffected.
+
+  **`rawnum.png` retired 2026-11-14** to `docs/attic`, off the default
+  list in `etc/charts.py`. Same three stacked defects, all flattering
+  tab: cpu clock against wall clock, one thread against ten, and a
+  `-P 8` harness whose penalty is about 3x for the forest and 7x for
+  LightGBM (the forest's "1.0x" was a harness bug that read the first
+  of eight to finish). Measured clean -- `n_jobs=1`, serial, wall,
+  3 reps, 5 numeric and 5 symbolic sets -- the paired median is luajit
+  1.26x LightGBM and tab2 under pypy 3.63x: parity, not a win. What
+  decides a set is klass count, not size: tab is ahead at k>=6
+  (0.11-0.40x) and behind at k=2 (3.0-6.1x). Totals say the opposite
+  (0.31x) only because `mfeat-factors` costs LightGBM 4.5s of its
+  5.9s. Do not redraw it from the corpus caches.
 - **moot's klass markers mistyped six classify sets** (fixed upstream in
   moot `37d9853`). The `!` had been appended to the last column, which
   in four sets is a continuous feature, so `wine`, `spectf.test`,
