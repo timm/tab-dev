@@ -121,7 +121,17 @@ Look = {
   # re-learn it.  `lgbm` and `tabicl` already match for the same
   # reason.  That pushed `nb` and `treedeep`, which used to be black,
   # onto blue and green.
-  "hardhist":  ("#000000", "-.", "^", "forest of 30")}
+  "hardhist":  ("#000000", "-.", "^", "forest of 30"),
+  # The forest the classify figures report since 2026-11-14: tab2.py
+  # under pypy, each tree trained on at most 256 rows of any klass
+  # (`etc/py256.py`).  Same black, same marker: it is the forest, and
+  # only where it runs and how many rows it reads have changed.  The
+  # lua arm above stays in the cache and is drawn by FOREST=hardhist.
+  "py256":     ("#000000", "-.", "^",
+                "forest of 30, 256 rows per klass")}
+
+# Which forest `auc` and `pdpf` draw.
+Forest = os.getenv("FOREST", "py256")
 
 # A short name per arm, for places where the long one does not fit.
 # The strip above each panel prints five of these side by side, and
@@ -136,7 +146,8 @@ Short = {"nb": "bayes", "nb72": "bayes", "treedeep": "1tree",
          "rmeansall": "rmeans-all", "acq": "acquire", "lgbm45": "lgbm45", "fornum45": "forest45",
          "fornumall": "forest-all", "fft": "fft",
          "rnb": "rnb",
-         "hardbin": "30tree/bin", "hardhist": "30tree"}
+         "hardbin": "30tree/bin", "hardhist": "30tree",
+         "py256": "30tree"}
 
 def short(w):
   "WHO's short name, reaching through an -auc suffix."
@@ -184,7 +195,7 @@ def sdstrip(sx, names, sds, lab, unit="{:.3f}", cap=None):
           transform=sx.transAxes, ha="left", va="bottom", fontsize=7.5,
           color="#555555")
 
-def agree(ax, names, a, b, tol, note=None):
+def agree(ax, names, a, b, tol, note=None, reps=None, draw=False):
   """Shade the sets where `a` and `b` land within `tol` of each other.
 
   The question a reader asks of these figures is not "which line is
@@ -192,15 +203,53 @@ def agree(ax, names, a, b, tol, note=None):
   one".  A grey column says: on this set, these two agree.  `tol` is
   in the measure's own units -- 5 points of a percentage, 0.05 of an
   auc -- so it means the same fraction of full scale either way.
+
+  Given `reps` -- the two arms' own per-rep scores, as a pair of
+  {set: [scores]} -- the rule is an effect size and not a tolerance,
+  and the column IS drawn: grey where the two means part by no more
+  than `tol` pooled standard deviations (cohen's d; .35 is a small
+  effect).  A tolerance in the measure's units shades whatever lands
+  inside a width someone chose; this asks whether the gap is small
+  beside what the 20 reps scatter by, so a set whose reps barely
+  move is held to a finer line than one whose reps wander.
+
+  Two other rules were drawn here on 2026-11-14 and dropped the same
+  day: `same` in full (cohen, cliffs and ks together), and that in
+  dark grey with "within 5 points" in a lighter one.  Two greys over
+  three quarters of a panel was more than the figure could carry.
   """
+  if reps:
+    def small(xs, ys):
+      "Are the means of XS and YS within TOL pooled sds?"
+      if len(xs) < 2 or len(ys) < 2: return False
+      sd = ((len(xs) - 1) * st.pstdev(xs) ** 2
+            + (len(ys) - 1) * st.pstdev(ys) ** 2)
+      sd = (sd / (len(xs) + len(ys) - 2)) ** .5
+      return abs(st.fmean(xs) - st.fmean(ys)) <= tol * sd
+    hit = [i for i, n in enumerate(names)
+           if reps[0].get(n) and reps[1].get(n)
+           and small(reps[0][n], reps[1][n])]
+    # zorder 1.8: over the grid, which an axes draws at 1.5 whatever
+    # its own zorder says, and under the band edges (2) and the data
+    # (3).  At 0 the pale grid lines ran across every grey column as
+    # white stripes.
+    for i in hit:
+      ax.axvspan(i - .5, i + .5, color="#d6d6d6", lw=0, zorder=1.8)
+    return hit
+  # `draw="far"` marks the other side: the sets where the two part by
+  # MORE than `tol`.  Agreement is three sets in four on `auc` and
+  # `pdpf`, and shading the majority marks nothing -- which is why the
+  # band was dropped once.  Shading the exceptions keeps most of the
+  # panel white and puts the grey where the reader should look.
+  far = draw == "far"
   hit = [i for i, n in enumerate(names)
          if a.get(n) is not None and b.get(n) is not None
-         and abs(a[n] - b[n]) <= tol]
-  # The band is NOT drawn.  `auc` and `pdpf` carry four arms over a
-  # hundred-odd sets, and a grey column behind every near-tie turned
-  # most of the panel grey -- shading that covers the majority of a
-  # figure stops marking anything.  The test still runs: callers use
-  # the returned index list, and the counts still print.
+         and (abs(a[n] - b[n]) > tol) == far]
+  # The band is drawn only when `draw` asks.  Over the grid, as above,
+  # so no pale line crosses it.
+  if draw:
+    for i in hit:
+      ax.axvspan(i - .5, i + .5, color="#d6d6d6", lw=0, zorder=1.8)
   return hit
 
 def dashes(ax, step):
@@ -1283,12 +1332,12 @@ def auc():
   # tab's own arm leads, not the naive Bayes.  Three arms only: the
   # forest, the booster it set out to match, and the model neither
   # reaches.  Grey asks one question -- is the forest TabICL yet?
-  who = tuple(["hardhistauc", "lgbmauc"]
+  who = tuple([Forest + "auc", "lgbmauc"]
               + [w for w in ("tabiclauc", "tabpfnauc",
                              "nbauc", "fftauc", "rnbauc",
                              "hardbinauc")
                  if glob.glob(f"{Cache}/classify/*/{w}.csv")])
-  Pair = ("hardhistauc", "tabiclauc")  # what the sort and sd strip use
+  Pair = (Forest + "auc", "tabiclauc")  # what the sort and sd strip use
   # Complete cases only: every arm drawn had to run on every set
   # shown.  A mean over 106 sets beside a mean over 87 is two
   # different questions printed as one row, and the sort key -- the
@@ -1321,7 +1370,7 @@ def auc():
   # sits from TabICL, left losing worst and right caught up.  That
   # one answers "is the forest TabICL yet"; this one answers "where
   # is this corpus hard".
-  Sortby = os.getenv("SORTBY", "hardhist")
+  Sortby = os.getenv("SORTBY", Forest)
   if Sortby == "gap":
     keep.sort(key=lambda nd: (grp[nd[0]],
                               med[Pair[0]][nd[0]] - med[Pair[1]][nd[0]]
@@ -1354,29 +1403,45 @@ def auc():
   Look["nbauc"] = Look["nb72"]           # ,/run writes nb at bins=7
   # A thin strip of its own, not a second scale on the first: sd and
   # auc do not share units, and one axis per panel is the rule.
-  f, (ax, sx) = plt.subplots(2, 1, figsize=(13, 7), dpi=200, sharex=True,
+  # 3.9in tall, not 7: with the axis starting at 0.4 the main panel
+  # needs no more height than one of pdpf's two, and at this size the
+  # two figures' panels read as the same kind of thing.
+  f, (ax, sx) = plt.subplots(2, 1, figsize=(13, 3.9), dpi=200, sharex=True,
                              gridspec_kw=dict(height_ratios=[4, 1],
-                                              hspace=.08))
+                                              hspace=.26))  # room for
+                                              # the strip's caption
   for a in (ax, sx):
     a.spines[["top", "right"]].set_visible(False)
     a.grid(axis="y", color="#eeeeee", zorder=0)
-  # Grey column: the new forest and TabICL land within 0.05 auc here
-  # -- the same fraction of full scale as pdpf's 5 points.
-  Near = ("tabiclauc", "hardhistauc")
-  shade = (agree(ax, names, med[Near[0]], med[Near[1]], .05)
-           if all(w in med for w in Near) else [])
-  if shade: agree(sx, names, med[Near[0]], med[Near[1]], .05)
+  # Grey column: the forest and TabICL part by MORE than 0.05 auc --
+  # the same fraction of full scale as pdpf's 5 points.
+  Near = ("tabiclauc", Forest + "auc")
+  both = (raw[Near[0]], raw[Near[1]]) if all(w in raw for w in Near) else None
+  if both:
+    # In the sd strip only: grey across the main panel sat behind the
+    # four lines it was meant to explain.  The strip is where a reader
+    # goes to ask "is that gap real", so the mark lives there.
+    shade = agree(sx, names, med[Near[0]], med[Near[1]], .05, draw="far")
+    ax.text(1, 1.012, "grey: {} of {} sets more than .05 from "
+            "{}".format(len(shade), len(names), short(Near[0])),
+            transform=ax.transAxes, ha="right", va="bottom",
+            fontsize=9, color="#777777")
   for a in (ax, sx):
     for j in edge: a.axvline(j - .5, color="#999999", lw=1, zorder=2)
-  # The full range, so a gap is read against the whole scale and not
-  # against a window chosen to flatter it.
-  Floor = 0
+  # From 0.4, not 0: nothing useful lives under chance, and the lower
+  # 40% of a full-range panel was empty paper that squeezed every gap
+  # above it.  The cost is that a gap now LOOKS 1.7x what it would on
+  # the whole scale, so read gaps off the numbers, not the picture.
+  # Anything under the floor is named in the note below, not lost.
+  Floor = float(os.getenv("AUCFLOOR", .4))
   for w in who:
-    col, ls, mk, lab = Look[w]
+    # No markers and no dashes, as on pdpf: at a hundred sets across
+    # the marks touch and four dash patterns crossing read as noise.
+    # Hue alone parts the arms.
+    col, _, _, lab = Look[w]
     ax.plot(range(len(names)),
             [med[w][n] if has(w, n) else float("nan") for n in names],
-            ls, color=col,
-            marker=mk or "o", ms=4, lw=1.4,
+            "-", color=col, lw=1.4,
             label="{}: {}".format(short(w), lab), zorder=3)
   ax.set_ylim(Floor, 1)
   dashes(ax, .05)            # auc runs 0-1, so 0.05 is the 5% step
@@ -1605,7 +1670,7 @@ def pdpf():
   fam = [("nb",       "one model"),
          ("fft",      "one model"),
          ("lgbm",     "many models"),
-         ("hardhist", "many models"),
+         (Forest,     "many models"),
          ("rnb",      "many models"),
          ("tabicl",   "neural")]
   who = [w for w, _ in fam if glob.glob(f"{Cache}/classify/*/{w}.csv")]
@@ -1631,7 +1696,7 @@ def pdpf():
   # sort, not a result.  So the arm sorted on is named on the x axis,
   # and SORTBY=mean restores the mean-pd key, which spends no arm's
   # shape to buy the reference line.
-  Sortby = os.getenv("SORTBY", "hardhist")
+  Sortby = os.getenv("SORTBY", Forest)
   if Sortby == "mean" or Sortby not in who:
     key = {n: st.fmean([med[(w, "pd")][n] for w in who]) for n, _ in keep}
     kname = "mean pd"
@@ -1654,21 +1719,30 @@ def pdpf():
   # Grey column: the new forest and TabICL land within 5 points here.
   # Both panels get the same columns, so a set that agrees on pd and
   # not on pf is visible as a column with one line apart in it.
-  Near = ("tabicl", "hardhist")
+  Near = ("tabicl", Forest)
   shade = {}
   if all(w in who for w in Near):
+    # Grey where the two arms' means part by MORE than 5 points.
     for k, (c, _) in enumerate(cols):
-      shade[c] = agree(ax[2 * k], names,
-                       med[(Near[0], c)], med[(Near[1], c)], 5)
+      both = tuple({n: vals(d, w, c) for n, d in keep} for w in Near)
+      # In the sd strip only, as on `auc`: the main panel keeps its
+      # lines on white.
+      shade[c] = agree(ax[2 * k + 1], names, med[(Near[0], c)],
+                       med[(Near[1], c)], 5, draw="far")
   for k, (c, ylab) in enumerate(cols):
     a = ax[2 * k]
     a.spines[["top", "right"]].set_visible(False)
     a.grid(axis="y", color="#eeeeee", zorder=0)
     for j in edge: a.axvline(j - .5, color="#999999", lw=1, zorder=2)
     for w in who:
-      col, ls, mk, _ = lab[w]
-      a.plot(range(len(names)), [med[(w, c)][n] for n in names], ls,
-             color=col, marker=mk, ms=3.5, lw=1.5,
+      # No markers: at a hundred sets across they touch, and four
+      # shapes stacked on one column hid the lines they sat on.  And
+      # solid, all of them: four dash patterns crossing each other
+      # read as noise.  Hue alone parts the arms, and these four hues
+      # were checked apart under colour-blind simulation.
+      col = lab[w][0]
+      a.plot(range(len(names)), [med[(w, c)][n] for n in names], "-",
+             color=col, lw=1.5,
              # Same string `auc` builds, so one legend reads for both.
              # The family tag that used to close this entry is gone:
              # it was the only thing parting the two figures' legends,
@@ -1678,8 +1752,8 @@ def pdpf():
     dashes(a, 5)                   # every 5%, unlabelled
     a.set_ylabel(ylab, fontsize=11)
     if c in shade:
-      a.text(1, 1.012, "grey: {} of {} sets within 5 of {}".format(
-               len(shade[c]), len(names), short(Near[0])),
+      a.text(1, 1.012, "grey: {} of {} sets more than 5 from "
+             "{}".format(len(shade[c]), len(names), short(Near[0])),
              transform=a.transAxes, ha="right", va="bottom",
              fontsize=9, color="#777777")
     a.text(0, 1.012, "mean over sets:   " + "      ".join(
@@ -1784,6 +1858,295 @@ def rawnum():
   f.savefig(f"{Docs}/rawnum.png", bbox_inches="tight"); plt.close(f)
   print(f"{Docs}/rawnum.png")
 
+def fitsecs():
+  """One fit and predict in seconds, every arm measured the same way.
+
+  The successor to `rawnum`, and it reads none of what `rawnum` read:
+  not the `secs` column of the score caches, only `cache/secs.csv`,
+  which `etc/secs.py` writes -- one thread, one wall clock, a set's
+  arms back to back, nothing in parallel.
+
+  One panel, one line per learner, seconds on a log y.  The sets are
+  sorted on LightGBM's seconds -- the baseline, and the one arm that
+  finished every set -- so its line climbs left to right and the
+  others are read against it at the same set.  A first version drew a
+  dot per arm per set in two panels, sorted on klasses; it held more
+  and could not be read.
+
+  A set TabICL could not finish is drawn, not dropped: a hollow mark
+  on the cap line, and a gap in its line.  Dropping it would leave
+  only the sets the dear arm finds cheap.
+  """
+  src = os.getenv("SECS") or os.path.join(
+          os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+          "cache", "secs.csv")
+  S = {}
+  for name, arm, n, x, k, status, secs, *_ in (
+        s.rstrip("\n").split(",") for s in list(open(src))[1:]):
+    d = S.setdefault(name, {"n": int(n)})
+    d[arm] = float(secs) if status == "ok" else None
+  Arm  = [("tabicl1", "#860c4f", "s", "TabICLv2"),
+          # `tab2c256`, not `tab2`: each tree trains on at most 256
+          # rows of any klass, which is tab2's default since the cap
+          # sweep.  The uncapped arm is still in secs.csv as `tab2`,
+          # and so is `luajit`, which this figure no longer draws: the
+          # forest that is reported is the python one.
+          ("tab2c256", "#0072B2", "D",
+           "tab2 forest(30), pypy, 256 rows per klass per tree"),
+          ("lgbm",    "#D55E00", "o", "LightGBM")]
+  names = [s for s in S if all(a[0] in S[s] for a in Arm)]
+  names.sort(key=lambda s: S[s]["lgbm"])
+  done = sum(S[s]["tabicl1"] is not None for s in names)
+  cap  = 120
+  f, a = plt.subplots(figsize=(11, 6.2), dpi=200)
+  a.spines[["top", "right"]].set_visible(False)
+  a.grid(axis="y", color="#eeeeee", zorder=0)
+  a.set_yscale("log")
+  for arm, c, mk, lab in Arm:
+    # nan, not a shorter list: a line must BREAK at a set the arm did
+    # not finish, or it joins its neighbours straight across the gap.
+    xs = range(len(names))
+    ys = [S[s][arm] for s in names if S[s][arm] is not None]
+    # A point with no finished neighbour has no line through it, so it
+    # alone keeps a dot: without one TabICL's `spectrometer`, between
+    # two sets it did not finish, would vanish from the figure.
+    v    = [S[s][arm] for s in names]
+    lone = [j for j in xs if v[j] is not None
+            and (j == 0 or v[j - 1] is None)
+            and (j == len(v) - 1 or v[j + 1] is None)]
+    a.plot(lone, [v[j] for j in lone], "o", color=c, ms=4, zorder=4)
+    # Solid and unmarked, as on auc and pdpf: hue alone parts the arms.
+    a.plot(xs, [S[s][arm] or float("nan") for s in names], "-",
+           color=c, lw=2, zorder=4,
+           label=f"{lab}   median " + (
+             f"{m * 1000:.0f} ms" if (m := st.median(ys)) < 1 else
+             f"{m:.1f} s") + (
+             f", over the {done} sets it finished"
+             if arm == "tabicl1" and done < len(names) else ""))
+  lost = [j for j, s in enumerate(names) if S[s]["tabicl1"] is None]
+  if lost:
+    a.plot(lost, [cap] * len(lost), "^", ls="", color="white",
+           mec="#860c4f", mew=1.4, ms=7, zorder=5,
+           label=f"TabICLv2 did not finish, {len(lost)} sets: "
+                 "over 2 minutes, or too big to load")
+  for y, t in ((1, "1 second"), (60, "1 minute")):
+    a.axhline(y, color="#cccccc", lw=1, zorder=1)
+    a.text(len(names) - .3, y, t, fontsize=8, color="#999999",
+           va="center", clip_on=False)   # in the margin, off the lines
+  a.set_xlim(-.6, len(names) - .4)
+  a.set_ylim(top=cap * 250)       # headroom: the legend sits above
+                                  # every mark, never across one
+  a.set_xticks(range(len(names)))
+  a.set_xticklabels([s[:22] for s in names], rotation=55, ha="right",
+                    fontsize=7)
+  a.set_xlabel(f"{len(names)} moot/classify sets, sorted on LightGBM's "
+               "seconds", fontsize=10)
+  a.set_ylabel("seconds for one fit and predict  (log)", fontsize=11)
+  a.legend(frameon=False, fontsize=9, loc="upper left",
+           bbox_to_anchor=(.02, 1), ncol=2, columnspacing=2.5)
+  f.suptitle("What one fit and predict costs", fontsize=13)
+  a.set_title("one thread each, wall clock, a set's arms run back to "
+              "back, min of the fits after two warm-ups",
+              fontsize=8.5, color="#555555")
+  f.tight_layout()
+  f.savefig(f"{Docs}/fitsecs.png", bbox_inches="tight"); plt.close(f)
+  print(f"{Docs}/fitsecs.png")
+
+def ystat(name):
+  "Mean and sd of a regression set's one goal column, from moot."
+  with open(f"{Moot}/regression/{name}.csv", encoding="utf-8-sig") as h:
+    R = [[c.strip() for c in s.strip().split(",")]
+         for s in h if s.strip() and s[0] != "#"]
+  at = next(j for j, c in enumerate(R[0]) if c and c[-1] in "+-!")
+  v  = []
+  for r in R[1:]:
+    try: v.append(float(r[at]))
+    except (ValueError, IndexError): pass
+  return st.fmean(v), st.pstdev(v)
+
+def maes(cap=None):
+  """mae over |mean y| on every moot/regression set, on a log y.
+
+  With `cap`, the forest drawn is `forcap<cap>` -- the same forest
+  with each tree held to that many rows (etc/forcap.lua) -- and the
+  figure is mae<cap>.png.  LightGBM and TabICL stay as they were,
+  on every row, so the three figures differ in one line only.
+
+  mae is in the units of each set's target -- ailerons' are
+  ten-thousandths, autoprice's are thousands -- so raw it says
+  nothing across sets.  Divided by the size of the mean of y it is a
+  fraction: 0.2 is "off by a fifth of a typical value".
+
+  That works where y is a quantity counted up from zero, which is
+  most of the corpus.  It does NOT work where y is centred near zero:
+  2dplanes has mean 0.0096 against an sd of 4.4, so a perfectly
+  ordinary error comes out 83 times "the mean".  Those sets are
+  drawn, because leaving them out would be choosing the sets, and
+  named under the axis, because their height is the divisor's doing
+  and not the learner's.  The divisor that has no such hole is sd(y).
+
+  A log y still, since the fraction spans four decades once those
+  sets are in; on it a fixed gap between two lines is a fixed ratio
+  of errors, whatever the divisor.  Sorted on LightGBM's own value.
+  Complete cases: every arm on every set.
+  """
+  Arm = [("lgbm",      "LightGBM, every row"),
+         ("tabicl",    "TabICLv2, every row"),
+         ((f"forcap{cap}", f"forest(30), {cap} rows per tree") if cap
+          else ("fornumall", "forest(30), every row"))]
+  # The plain figure carries a fourth treatment: the forest again, at
+  # 50 rows a tree.  Grey beside the all-rows forest's black -- one
+  # learner at two budgets, so one family of ink and not a new hue.
+  if not cap: Arm.append(("forcap50", "forest(30), 50 rows per tree"))
+  hue = lambda w: ("#8f8f8f" if not cap and w.startswith("forcap") else
+                   Look["fornumall" if w.startswith("forcap") else w][0])
+  S   = sets("regression", [w for w, _ in Arm])
+  med = {w: {n: st.fmean(v) for n, d in S if (v := cells(d, w, "mae"))}
+         for w, _ in Arm}
+  names = [n for n, _ in S if all(n in med[w] for w, _ in Arm)]
+  ys_   = {n: ystat(n) for n in names}
+  # Centred near zero: the mean is under half an sd from it, so the
+  # divisor is small for a reason that has nothing to do with scale.
+  zero  = [n for n in names if abs(ys_[n][0]) < .5 * ys_[n][1]]
+  med   = {w: {n: med[w][n] / (abs(ys_[n][0]) + 1e-32) for n in names}
+           for w, _ in Arm}
+  names.sort(key=lambda n: med["lgbm"][n])
+  f, a = plt.subplots(figsize=(13, 5.4), dpi=200)
+  a.spines[["top", "right"]].set_visible(False)
+  a.grid(axis="y", color="#eeeeee", zorder=0)
+  a.set_yscale("log")
+  gone = []
+  for w, lab in Arm:
+    # A mae of 0 has no log.  It is also not a result: the one seen so
+    # far was a small mae written to three decimals by an old cache.
+    # So it is a gap in the line, and it is named under the axis.
+    ys = [med[w][n] if med[w][n] > 0 else float("nan") for n in names]
+    gone += [f"{lab.split(',')[0]} on {n}" for n in names if med[w][n] <= 0]
+    r = sorted(med[w][n] / med["lgbm"][n] for n in names
+               if med["lgbm"][n] > 0)
+    a.plot(range(len(names)), ys, "-", color=hue(w), lw=1.8, zorder=3,
+           label=lab if w == "lgbm" else
+                 f"{lab}   median {st.median(r):.2f}x LightGBM's mae, "
+                 f"lower on {sum(x < 1 for x in r)} of {len(r)}")
+  a.set_xlim(-.6, len(names) - .4)
+  a.set_xticks(range(len(names)))
+  a.set_xticklabels([n[:22] for n in names], rotation=55, ha="right",
+                    fontsize=7)
+  # Bold the names whose height is the divisor's doing, and say so.
+  for t, n in zip(a.get_xticklabels(), names):
+    if n in zero: t.set_fontweight("bold"); t.set_color("#b00020")
+  a.axhline(1, color="#cccccc", lw=1, zorder=1)
+  a.text(len(names) - .3, 1, "error = mean y", fontsize=8,
+         color="#999999", va="center", clip_on=False)
+  a.set_xlabel(f"{len(names)} moot/regression sets, sorted on LightGBM's "
+               "mae / |mean y|" +
+               (f"\nred: {len(zero)} sets whose y is centred near zero "
+                "(|mean| under half an sd), where this divisor is "
+                "meaningless" if zero else "") +
+               ("\nno log of a zero mae, so a gap: " + "; ".join(gone)
+                if gone else ""), fontsize=10)
+  a.set_ylabel("mae / |mean y|  (log)", fontsize=11)
+  a.legend(frameon=False, fontsize=9, loc="upper left")
+  f.suptitle("Mean absolute error on regression, as a fraction of "
+             "mean y", fontsize=13)
+  a.set_title("each point is one set's mean over 20 random 80:20 splits; "
+              "a fixed gap between two lines is a fixed ratio of errors",
+              fontsize=8.5, color="#555555")
+  f.tight_layout()
+  out = f"{Docs}/mae{cap or ''}.png"
+  f.savefig(out, bbox_inches="tight"); plt.close(f)
+  print(out)
+
+def maecaps():
+  """The regression forest, and one tree, as each is given fewer rows.
+
+  Same y as `maes`: mae over |mean y|, log.  No LightGBM and no
+  TabICL -- two questions only.  What does the forest lose as each of
+  its 30 trees is handed fewer rows?  And at the same budget, what do
+  the other 29 trees buy: is a forest on 50 rows a tree better than
+  ONE tree on 50 rows?  (`treecap<n>`, from `TREES=1 etc/forcap.lua`:
+  one tree, n distinct rows, every column at every split.)
+
+  Blue is the forest and green the lone tree; within a family the ink
+  runs dark to light with the rows and the lines are nested widest to
+  thinnest, so where a family agrees with itself -- every set smaller
+  than the cap is not capped at all -- it shows as one line, and
+  where it parts the thin line lifts off the wide one.
+
+  Sorted on the largest-cap forest.  A name in grey is a set with no
+  more training rows than the smallest cap, where a cap changes
+  nothing and all that is left to see is forest against tree.
+  """
+  caps = [int(c) for c in os.getenv("CAPS", "250,100,50").split(",")]
+  wide = [4.6, 2.8, 1.2, .9, .7]
+  Fam  = (("forcap",  "forest(30)", ["#08306b", "#2f7fc1", "#9ecae1",
+                                     "#bcdaf0", "#d6e6f5"]),
+          ("treecap", "one tree",   ["#00441b", "#2f9e5b", "#a3dbb2",
+                                     "#c7ead0", "#dff3e3"]))
+  Arm  = [(f"{pre}{c}", ramp[min(k, 4)], wide[min(k, 4)],
+           f"{lab}, {c} rows" + (" per tree" if pre == "forcap" else ""))
+          for pre, lab, ramp in Fam for k, c in enumerate(caps)]
+  Arm  = [a for a in Arm if glob.glob(f"{Cache}/regression/*/{a[0]}.csv")]
+  need = [a[0] for a in Arm] + ["fornumall"]
+  S    = sets("regression", need)
+  raw  = {w: {n: st.fmean(v) for n, d in S if (v := cells(d, w, "mae"))}
+          for w in need}
+  names = [n for n, _ in S if all(n in raw[w] for w in raw)]
+  ys_   = {n: ystat(n) for n in names}
+  train = {n: int(.8 * rows(n, "regression")) for n in names}
+  med   = {w: {n: raw[w][n] / (abs(ys_[n][0]) + 1e-32) for n in names}
+           for w in raw}
+  names.sort(key=lambda n: med[Arm[0][0]][n])
+  f, a = plt.subplots(figsize=(13, 5.8), dpi=200)
+  a.spines[["top", "right"]].set_visible(False)
+  a.grid(axis="y", color="#eeeeee", zorder=0)
+  # Linear, 0 to YTOP (2): asked for in place of the log axis, which
+  # squeezed every gap.  The price is the few sets whose value runs
+  # past the top -- they are the ones whose y is centred near zero, so
+  # their height was the divisor's doing anyway -- and each is named
+  # under the axis with the value it left at.
+  top = float(os.getenv("YTOP", 2))
+  for w, c, lw, lab in Arm:
+    r = [raw[w][n] / raw["fornumall"][n] for n in names
+         if raw["fornumall"][n] > 0]
+    a.plot(range(len(names)), [med[w][n] for n in names], "-", color=c,
+           lw=lw, zorder=3 if w.startswith("forcap") else 4,
+           solid_capstyle="round",
+           label=f"{lab}   median {st.median(r):.2f}x the all-rows "
+                 f"forest's mae, worse on {sum(x > 1.05 for x in r)} "
+                 f"of {len(r)}")
+  a.set_xlim(-.6, len(names) - .4)
+  a.set_xticks(range(len(names)))
+  a.set_xticklabels([n[:22] for n in names], rotation=55, ha="right",
+                    fontsize=7)
+  small = [n for n in names if train[n] <= min(caps)]
+  for t, n in zip(a.get_xticklabels(), names):
+    if n in small: t.set_color("#aaaaaa")
+  a.axhline(1, color="#cccccc", lw=1, zorder=1)
+  a.text(len(names) - .3, 1, "error = mean y", fontsize=8,
+         color="#999999", va="center", clip_on=False)
+  off = sorted({n for w, *_ in Arm for n in names if med[w][n] > top},
+               key=names.index)
+  note = ("\noff the top (largest of the six lines): " + ",  ".join(
+            f"{n} {max(med[w][n] for w, *_ in Arm):.0f}" for n in off)
+          if off else "")
+  a.set_xlabel(f"{len(names)} moot/regression sets, sorted on the "
+               f"{caps[0]}-row forest's mae / |mean y|\n"
+               f"grey names: {len(small)} sets with at most {min(caps)} "
+               "training rows, where no cap bites" + note, fontsize=10)
+  a.set_ylabel("mae / |mean y|", fontsize=11)
+  a.set_ylim(0, top)
+  a.legend(frameon=False, fontsize=8.5, loc="upper left", ncol=1,
+           columnspacing=2)
+  f.suptitle("Regression: a forest of 30 against one tree, as each is "
+             "given fewer rows", fontsize=13)
+  a.set_title("each point is one set's mean over 20 random 80:20 splits; "
+              "\"worse\" counts sets more than 5% above the all-rows "
+              "forest", fontsize=8.5, color="#555555")
+  f.tight_layout()
+  f.savefig(f"{Docs}/maecaps.png", bbox_inches="tight"); plt.close(f)
+  print(f"{Docs}/maecaps.png")
+
 def rawall():
   """One fit and predict, the three tasks side by side.
 
@@ -1861,7 +2224,11 @@ if __name__ == "__main__":
            "profopt":   lambda: profile("optimize", "profopt"),
            "profreg":   lambda: profile("regression", "profreg"),
            "winopt":    lambda: winsplit("optimize"),
-           "winreg":    lambda: winsplit("regression")}
+           "winreg":    lambda: winsplit("regression"),
+           "mae125":    lambda: maes(125),
+           "mae250":    lambda: maes(250),
+           "mae500":    lambda: maes(500),
+           "maecaps":   maecaps}
   # `top5`, `labels` and `arms` are off the default list and their pngs live in
   # docs/attic: `top5reg`/`top5opt` carry the same question with the
   # arms that came later, and every arm and measure `arms` drew is in
@@ -1882,6 +2249,8 @@ if __name__ == "__main__":
   # thread against ten, and a `-P 8` harness that costs the threaded
   # arm about 2.3x more than the other.  Redrawing it from the same
   # caches repairs none of them.
+  # `fitsecs` takes its place, and reads only `cache/secs.csv`.
   jobs = sys.argv[1:] or ["auc", "pdpf",
-                          "labelsreg", "labelsopt", "winreg", "winopt"]
+                          "labelsreg", "labelsopt", "winreg", "winopt",
+                          "fitsecs"]
   for j in jobs: (extra.get(j) or globals()[j])()

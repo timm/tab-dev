@@ -299,6 +299,65 @@ Settle this before citing either number.
   (0.11-0.40x) and behind at k=2 (3.0-6.1x). Totals say the opposite
   (0.31x) only because `mfeat-factors` costs LightGBM 4.5s of its
   5.9s. Do not redraw it from the corpus caches.
+
+  **Its replacement is `docs/fitsecs.png`** (2026-11-14), drawn by
+  `charts.py fitsecs` from `cache/secs.csv`, which `etc/secs.py run`
+  writes and nothing else does. The rig: 30 classify sets stratified
+  over rows and klasses; every arm one thread, wall clock, a set's arms
+  back to back, nothing in parallel; fit on 80% and predict 20%; min
+  of the fits after two warm-ups; an arm killed at 2 min is recorded
+  as `capped`, not dropped. cpu/wall came out 1.00 for every
+  one-thread arm, 2.3 for TabICL as shipped. Median seconds over
+  LightGBM's on the same set:
+
+      tab forest, luajit (51 bins)    1.8x    faster on 10 of 30
+      tab2, pypy (7 bins)             3.1x    faster on  7 of 30
+      tab2, pypy (50 bins)            6.8x
+      TabICLv2, 1 thread              260x    6 of 30 not finished
+      TabICLv2, as shipped            206x    5 of 30 not finished
+
+  Klass count decides tab against LightGBM, and rows do not: luajit
+  is 3.5x at k=2 (n=16), 1.1x at k=3-5 (n=5), 0.24x at k>=6 (n=9).
+  Summed over all 30 the forest is the cheaper (12.9s against 36.3s),
+  but `har` alone is 23.7s of LightGBM's total, so quote the median.
+  TabICL's six: three over nn.py's row and cell guards (`letter`,
+  `adult`, `har`), three past the cap. tab2 is not the same learner as
+  the lua forest until its `bins` is 50, and at 50 its O(B^2)
+  `Num.cut` costs it another 2x.
+
+  **Later the same day the forest the classify figures report became
+  tab2's, capped**: each tree trains on at most 256 rows of any one
+  klass (`cap` in tab2.py, drawn afresh per tree). Arm `py256`, written
+  by `etc/py256.py` on the lua arms' own splits -- klasses-per-rep
+  identical to `hardhist` on all 118 sets. `auc`, `pdpf` and `fitsecs`
+  draw it; `FOREST=hardhist` puts the lua forest back. The cap came
+  from a sweep (`cache/caps.csv`, `caps2.csv`, ten sets): auc holds
+  within 0.005 on 9 of 10 from 250 up and on 7 of 10 at 200; accuracy
+  is the cost, a point or two from fewer rows and about six on a
+  skewed set like `adult`, where balancing moves the priors while auc
+  RISES 0.045. Over the 103 complete cases:
+
+      arm        acc    pf    d2h   auc
+      py256      82.2  19.4  .226  .867
+      hardhist   83.3  22.3  .246  .872
+      lgbm       83.3  19.7  .226  .866
+      tabicl     86.9  17.6  .194  .896
+
+  So the capped python forest gives up a point of accuracy and .005
+  auc to the lua one, ties LightGBM on auc and d2h, and its worst auc
+  losses (`hypothyroid` -.052, `anneal` -.043) are sets where 7 bins
+  is known to be too few -- bins, not the cap. Seconds, one paired
+  pass, median over LightGBM's: py256 1.33x, lua forest 1.57x, tab2
+  uncapped 3.17x; on `adult` 0.33s against LightGBM's 0.42s and the
+  uncapped 13.1s.
+
+  **This machine alternates between two speeds, about 2x apart**, for
+  minutes at a time, with cpu equal to wall throughout -- so it is the
+  cores, not waiting. `letter` uncapped read 1.76s and then 3.56s from
+  the same code ten minutes later. Arms measured in different passes
+  do not compare; only a set's arms run back to back do. That is why
+  `secs.csv` was rebuilt in one pass and holds the morning's rows as
+  `*_am` and `*old`.
 - **moot's klass markers mistyped six classify sets** (fixed upstream in
   moot `37d9853`). The `!` had been appended to the last column, which
   in four sets is a continuous feature, so `wine`, `spectf.test`,
