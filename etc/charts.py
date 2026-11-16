@@ -1858,7 +1858,7 @@ def rawnum():
   f.savefig(f"{Docs}/rawnum.png", bbox_inches="tight"); plt.close(f)
   print(f"{Docs}/rawnum.png")
 
-def fitsecs():
+def fitsecs(kind="classify", cap=120):
   """One fit and predict in seconds, every arm measured the same way.
 
   The successor to `rawnum`, and it reads none of what `rawnum` read:
@@ -1879,7 +1879,9 @@ def fitsecs():
   """
   src = os.getenv("SECS") or os.path.join(
           os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-          "cache", "secs.csv")
+          "cache", {"classify": "secs.csv", "optimize": "secsopt.csv"
+                    }.get(kind, "secsreg.csv"))
+  if kind != "classify": src = os.getenv("SECSREG") or src
   S = {}
   for name, arm, n, x, k, status, secs, *_ in (
         s.rstrip("\n").split(",") for s in list(open(src))[1:]):
@@ -1894,10 +1896,18 @@ def fitsecs():
           ("tab2c256", "#0072B2", "D",
            "tab2 forest(30), pypy, 256 rows per klass per tree"),
           ("lgbm",    "#D55E00", "o", "LightGBM")]
+  # Regression: the forest regmae.png scores -- 30 trees bootstrapped
+  # from one sample of 100 rows, table and all built from that sample.
+  if kind != "classify":
+    # `tab2o200`: tab2 as it ships, each tree drawing its own 200
+    # rows.  (`tab2f100`, one sample of 100 shared by all thirty, was
+    # drawn here first and is still in the csv.)
+    Arm[1] = ("tab2o200", "#0072B2", "D",
+              "tab2 forest(30), pypy, each tree draws its own 200 rows")
   names = [s for s in S if all(a[0] in S[s] for a in Arm)]
   names.sort(key=lambda s: S[s]["lgbm"])
   done = sum(S[s]["tabicl1"] is not None for s in names)
-  cap  = 120
+  # `cap` is the rig's: 120s, or what CAP= was for that run.
   f, a = plt.subplots(figsize=(11, 6.2), dpi=200)
   a.spines[["top", "right"]].set_visible(False)
   a.grid(axis="y", color="#eeeeee", zorder=0)
@@ -1928,7 +1938,8 @@ def fitsecs():
     a.plot(lost, [cap] * len(lost), "^", ls="", color="white",
            mec="#860c4f", mew=1.4, ms=7, zorder=5,
            label=f"TabICLv2 did not finish, {len(lost)} sets: "
-                 "over 2 minutes, or too big to load")
+                 + ("over 1 minute" if cap <= 60 else f"over {cap // 60} minutes")
+                 + ", or too big to load")
   for y, t in ((1, "1 second"), (60, "1 minute")):
     a.axhline(y, color="#cccccc", lw=1, zorder=1)
     a.text(len(names) - .3, y, t, fontsize=8, color="#999999",
@@ -1939,7 +1950,7 @@ def fitsecs():
   a.set_xticks(range(len(names)))
   a.set_xticklabels([s[:22] for s in names], rotation=55, ha="right",
                     fontsize=7)
-  a.set_xlabel(f"{len(names)} moot/classify sets, sorted on LightGBM's "
+  a.set_xlabel(f"{len(names)} moot/{kind} sets, sorted on LightGBM's "
                "seconds", fontsize=10)
   a.set_ylabel("seconds for one fit and predict  (log)", fontsize=11)
   a.legend(frameon=False, fontsize=9, loc="upper left",
@@ -1949,8 +1960,24 @@ def fitsecs():
               "back, min of the fits after two warm-ups",
               fontsize=8.5, color="#555555")
   f.tight_layout()
-  f.savefig(f"{Docs}/fitsecs.png", bbox_inches="tight"); plt.close(f)
-  print(f"{Docs}/fitsecs.png")
+  out = "{}/{}.png".format(Docs, {"classify": "fitsecs",
+                                  "optimize": "optsecs"}.get(kind, "regsecs"))
+  f.savefig(out, bbox_inches="tight"); plt.close(f)
+  print(out)
+
+def ydstat(name):
+  """Mean and sd of ydist over an optimize set's rows -- min.py's
+  ydist, off the whole table, which is the y lgbm.py, nn.py and
+  pyreg.py all score.  Kept in cache/ydist.json: the largest set is
+  167k rows and this is read on every draw."""
+  memo = f"{Cache}/ydist.json"
+  got  = json.load(open(memo)) if os.path.exists(memo) else {}
+  if name not in got:
+    t = M.Tbl(glob.glob(f"{Moot}/optimize/*/{name}.csv")[0])
+    v = [M.ydist(t, r) for r in t.rows]
+    got[name] = [st.fmean(v), st.pstdev(v)]
+    json.dump(got, open(memo, "w"))
+  return got[name]
 
 def ystat(name):
   "Mean and sd of a regression set's one goal column, from moot."
@@ -1964,7 +1991,7 @@ def ystat(name):
     except (ValueError, IndexError): pass
   return st.fmean(v), st.pstdev(v)
 
-def maes(cap=None):
+def maes(cap=None, arm=None, kind="regression"):
   """mae over |mean y| on every moot/regression set, on a log y.
 
   With `cap`, the forest drawn is `forcap<cap>` -- the same forest
@@ -2000,11 +2027,27 @@ def maes(cap=None):
   if not cap: Arm.append(("forcap50", "forest(30), 50 rows per tree"))
   hue = lambda w: ("#8f8f8f" if not cap and w.startswith("forcap") else
                    Look["fornumall" if w.startswith("forcap") else w][0])
-  S   = sets("regression", [w for w, _ in Arm])
+  # With `arm` -- (name, label) -- the figure is three treatments and
+  # regmae.png: the two every-row learners and that one forest, black
+  # as the forest is everywhere else.
+  if arm:
+    Arm = Arm[:2] + [arm]
+    hue = lambda w: Look[w if w in Look else "fornumall"][0]
+  S   = sets(kind, [w for w, _ in Arm])
+  if kind == "optimize":
+    # TabICL files written before its goal() patch hold mae in raw y
+    # units, not ydist (STALE-tabicl.txt names them).  One of those
+    # beside two ydist arms is a line that means something else.
+    stale = {l.strip() for l in open(os.path.join(os.path.dirname(
+               os.path.dirname(os.path.abspath(__file__))),
+               "STALE-tabicl.txt")) if l.strip() and l[0] != "#"}
+    S = [(n, d) for n, d in S
+         if d.split(Cache + "/")[-1].rstrip("/") not in stale]
   med = {w: {n: st.fmean(v) for n, d in S if (v := cells(d, w, "mae"))}
          for w, _ in Arm}
   names = [n for n, _ in S if all(n in med[w] for w, _ in Arm)]
-  ys_   = {n: ystat(n) for n in names}
+  ys_   = {n: (ydstat if kind == "optimize" else ystat)(n)
+           for n in names}
   # Centred near zero: the mean is under half an sd from it, so the
   # divisor is small for a reason that has nothing to do with scale.
   zero  = [n for n in names if abs(ys_[n][0]) < .5 * ys_[n][1]]
@@ -2038,7 +2081,7 @@ def maes(cap=None):
   a.axhline(1, color="#cccccc", lw=1, zorder=1)
   a.text(len(names) - .3, 1, "error = mean y", fontsize=8,
          color="#999999", va="center", clip_on=False)
-  a.set_xlabel(f"{len(names)} moot/regression sets, sorted on LightGBM's "
+  a.set_xlabel(f"{len(names)} moot/{kind} sets, sorted on LightGBM's "
                "mae / |mean y|" +
                (f"\nred: {len(zero)} sets whose y is centred near zero "
                 "(|mean| under half an sd), where this divisor is "
@@ -2047,47 +2090,60 @@ def maes(cap=None):
                 if gone else ""), fontsize=10)
   a.set_ylabel("mae / |mean y|  (log)", fontsize=11)
   a.legend(frameon=False, fontsize=9, loc="upper left")
-  f.suptitle("Mean absolute error on regression, as a fraction of "
-             "mean y", fontsize=13)
+  f.suptitle("Mean absolute error on " + ("optimization (y = ydist, "
+             "distance to heaven)" if kind == "optimize" else "regression")
+             + ", as a fraction of mean y", fontsize=13)
   a.set_title("each point is one set's mean over 20 random 80:20 splits; "
               "a fixed gap between two lines is a fixed ratio of errors",
               fontsize=8.5, color="#555555")
   f.tight_layout()
-  out = f"{Docs}/mae{cap or ''}.png"
+  out = (f"{Docs}/optmae.png" if kind == "optimize" else
+         f"{Docs}/regmae.png" if arm else f"{Docs}/mae{cap or ''}.png")
   f.savefig(out, bbox_inches="tight"); plt.close(f)
   print(out)
 
 def maecaps():
-  """The regression forest, and one tree, as each is given fewer rows.
+  """Two regression forests of 30, as each is given fewer rows.
 
-  Same y as `maes`: mae over |mean y|, log.  No LightGBM and no
-  TabICL -- two questions only.  What does the forest lose as each of
-  its 30 trees is handed fewer rows?  And at the same budget, what do
-  the other 29 trees buy: is a forest on 50 rows a tree better than
-  ONE tree on 50 rows?  (`treecap<n>`, from `TREES=1 etc/forcap.lua`:
-  one tree, n distinct rows, every column at every split.)
+  Same y as `maes`: mae over |mean y|.  No LightGBM and no TabICL --
+  one question only: when rows are scarce, does it matter HOW a
+  forest spends them?
 
-  Blue is the forest and green the lone tree; within a family the ink
-  runs dark to light with the rows and the lines are nested widest to
-  thinnest, so where a family agrees with itself -- every set smaller
-  than the cap is not capped at all -- it shows as one line, and
-  where it parts the thin line lifts off the wide one.
+  Blue, `forcap<n>`: the ordinary random forest, each tree drawing
+  its own n rows from the whole training set.  Thirty trees may read
+  thirty times n rows between them, so this is a cheaper forest and
+  not a smaller budget.
 
-  Sorted on the largest-cap forest.  A name in grey is a set with no
-  more training rows than the smallest cap, where a cap changes
-  nothing and all that is left to see is forest against tree.
+  Green, `fixcap<n>`: n rows are drawn ONCE and that is all there is;
+  each of the thirty trees is a bootstrap of those same n.  This is
+  the forest you can build when n labels is what you have.
+
+  Within a family the ink runs dark to light with the rows and the
+  lines are nested widest to thinnest, so where a family agrees with
+  itself -- a set smaller than the cap is not capped at all -- it
+  shows as one line.  Sorted on the largest-cap blue forest.  A name
+  in grey is a set with no more training rows than the smallest cap,
+  where blue and green are the same forest.
+
+  (A lone tree on n rows was drawn here first, `treecap<n>`; it is
+  still in the cache.  It lost to both forests at every n.)
   """
   caps = [int(c) for c in os.getenv("CAPS", "250,100,50").split(",")]
   wide = [4.6, 2.8, 1.2, .9, .7]
-  Fam  = (("forcap",  "forest(30)", ["#08306b", "#2f7fc1", "#9ecae1",
-                                     "#bcdaf0", "#d6e6f5"]),
-          ("treecap", "one tree",   ["#00441b", "#2f9e5b", "#a3dbb2",
-                                     "#c7ead0", "#dff3e3"]))
-  Arm  = [(f"{pre}{c}", ramp[min(k, 4)], wide[min(k, 4)],
-           f"{lab}, {c} rows" + (" per tree" if pre == "forcap" else ""))
+  # Which forest: tab2.py's under pypy (etc/pyreg.py), a true
+  # regression forest on y[0]; or, with CAPFAM=lua, tab-eg.lua's
+  # better-half forest read at the leaf (etc/forcap.lua).
+  own, one, base = (("forcap", "fixcap", "fornumall")
+                    if os.getenv("CAPFAM") == "lua" else
+                    ("pycap", "pyfix", "pyall"))
+  Fam  = ((own, "each tree draws its own {} rows",
+           ["#08306b", "#2f7fc1", "#9ecae1", "#bcdaf0", "#d6e6f5"]),
+          (one, "all 30 trees share one sample of {} rows",
+           ["#00441b", "#2f9e5b", "#a3dbb2", "#c7ead0", "#dff3e3"]))
+  Arm  = [(f"{pre}{c}", ramp[min(k, 4)], wide[min(k, 4)], lab.format(c))
           for pre, lab, ramp in Fam for k, c in enumerate(caps)]
   Arm  = [a for a in Arm if glob.glob(f"{Cache}/regression/*/{a[0]}.csv")]
-  need = [a[0] for a in Arm] + ["fornumall"]
+  need = [a[0] for a in Arm] + [base]
   S    = sets("regression", need)
   raw  = {w: {n: st.fmean(v) for n, d in S if (v := cells(d, w, "mae"))}
           for w in need}
@@ -2107,10 +2163,9 @@ def maecaps():
   # under the axis with the value it left at.
   top = float(os.getenv("YTOP", 2))
   for w, c, lw, lab in Arm:
-    r = [raw[w][n] / raw["fornumall"][n] for n in names
-         if raw["fornumall"][n] > 0]
+    r = [raw[w][n] / raw[base][n] for n in names if raw[base][n] > 0]
     a.plot(range(len(names)), [med[w][n] for n in names], "-", color=c,
-           lw=lw, zorder=3 if w.startswith("forcap") else 4,
+           lw=lw, zorder=3 if w.startswith(own) else 4,
            solid_capstyle="round",
            label=f"{lab}   median {st.median(r):.2f}x the all-rows "
                  f"forest's mae, worse on {sum(x > 1.05 for x in r)} "
@@ -2133,19 +2188,93 @@ def maecaps():
   a.set_xlabel(f"{len(names)} moot/regression sets, sorted on the "
                f"{caps[0]}-row forest's mae / |mean y|\n"
                f"grey names: {len(small)} sets with at most {min(caps)} "
-               "training rows, where no cap bites" + note, fontsize=10)
+               "training rows, where blue and green are one forest"
+               + note, fontsize=10)
   a.set_ylabel("mae / |mean y|", fontsize=11)
   a.set_ylim(0, top)
   a.legend(frameon=False, fontsize=8.5, loc="upper left", ncol=1,
            columnspacing=2)
-  f.suptitle("Regression: a forest of 30 against one tree, as each is "
-             "given fewer rows", fontsize=13)
+  f.suptitle(("tab-eg.lua" if own == "forcap" else "tab2.py") +
+             " regression forest of 30: fresh rows for every tree, or "
+             "one small sample shared by all", fontsize=13)
   a.set_title("each point is one set's mean over 20 random 80:20 splits; "
               "\"worse\" counts sets more than 5% above the all-rows "
               "forest", fontsize=8.5, color="#555555")
   f.tight_layout()
   f.savefig(f"{Docs}/maecaps.png", bbox_inches="tight"); plt.close(f)
   print(f"{Docs}/maecaps.png")
+
+def wins(kind="regression"):
+  """win on every moot/regression or moot/optimize set.
+
+  The protocol every arm is scored by: sort the held-out fifth on the
+  model's guess, best first; label the top five -- look up what they
+  really score; keep the best one.  win says how much of the gap from
+  an average held-out row to the best held-out row that one closes:
+  100 found the best row, 0 did no better than picking at random.
+
+  Four treatments.  LightGBM and TabICL read every training row;
+  tab2's forest is as it ships -- 30 trees, each drawing its own 200
+  rows; and `acquire` spends 45 labels and builds no model of y at
+  all.  The other 45-label arms are left out: this figure is the
+  learners at full strength beside the one cheap thing tab is for.
+
+  Complete cases: a set is drawn only if all three have a win on it.
+  TabICL declines sets over nn.py's row and cell guards, so the
+  largest sets are absent -- the count is on the x axis.
+
+  Sorted on tab2's win, so its line climbs and the others are read
+  against it at the same set.  win piles up at 100, so the right of
+  the figure is flat for everyone; the left is where arms differ.
+  """
+  Arm = [("lgbm",     "LightGBM, every row"),
+         ("tabicl",   "TabICLv2, every row"),
+         ("pycap200", "tab2 forest(30), each tree draws its own 200 rows"),
+         # The one arm here on a label budget, and the only one with
+         # no model of y: `acquire` labels 45 rows, steering toward
+         # rows nearer the best it has seen than the rest, then ranks
+         # the holdout by that same near-best, far-from-rest score.
+         # tab.lua's, as cached -- tab2.py has no acquire yet.
+         ("acq",      "acquire, 45 labels, no y model (tab.lua)")]
+  S   = sets(kind, [w for w, _ in Arm])
+  med = {w: {n: st.fmean(v) for n, d in S if (v := cells(d, w, "win"))}
+         for w, _ in Arm}
+  names = [n for n, _ in S if all(n in med[w] for w, _ in Arm)]
+  # On tab2, the arm this repo ships (it was acquire, then LightGBM,
+  # before): its line climbs and the rest are read against it.  WINSORT=lgbm
+  # (or any arm) sorts on that one instead.
+  key = os.getenv("WINSORT", "pycap200")
+  names.sort(key=lambda n: (med[key][n], med["pycap200"][n]))
+  f, a = plt.subplots(figsize=(13, 5.4), dpi=200)
+  a.spines[["top", "right"]].set_visible(False)
+  a.grid(axis="y", color="#eeeeee", zorder=0)
+  for w, lab in Arm:
+    v = [med[w][n] for n in names]
+    a.plot(range(len(names)), v, "-", color=Look[w if w in Look
+           else "fornumall"][0], lw=1.8, zorder=3,
+           label=f"{lab}   median {st.median(v):.0f}, mean "
+                 f"{st.fmean(v):.1f}, 95 or more on "
+                 f"{sum(x >= 95 for x in v)} of {len(v)}")
+  a.set_ylim(min(0, min(min(med[w][n] for n in names) for w, _ in Arm))
+             - 2, 103)
+  a.set_xlim(-.6, len(names) - .4)
+  a.set_xticks(range(len(names)))
+  a.set_xticklabels([n[:22] for n in names], rotation=55, ha="right",
+                    fontsize=7 if len(names) < 70 else 5.5)
+  a.set_xlabel(f"{len(names)} moot/{kind} sets, sorted on "
+               f"{dict(Arm)[key].split(',')[0]}'s win", fontsize=10)
+  a.set_ylabel("win:  100 = found the best held-out row", fontsize=11)
+  a.legend(frameon=False, fontsize=9, loc="lower right")
+  f.suptitle("Finding the best row: " + ("optimization (y = ydist)"
+             if kind == "optimize" else "regression (y = the goal "
+             "column)"), fontsize=13)
+  a.set_title("sort the held-out rows on the guess, label the top five, "
+              "keep the best one; each point is one set's mean over 20 "
+              "random 80:20 splits", fontsize=8.5, color="#555555")
+  f.tight_layout()
+  out = f"{Docs}/{'optwin' if kind == 'optimize' else 'regwin'}.png"
+  f.savefig(out, bbox_inches="tight"); plt.close(f)
+  print(out)
 
 def rawall():
   """One fit and predict, the three tasks side by side.
@@ -2228,7 +2357,22 @@ if __name__ == "__main__":
            "mae125":    lambda: maes(125),
            "mae250":    lambda: maes(250),
            "mae500":    lambda: maes(500),
-           "maecaps":   maecaps}
+           "maecaps":   maecaps,
+           # tab2.py's regression forest as it is meant to be run: 30
+           # trees, all bootstrapped from one sample of 100 rows.
+           "regsecs":   lambda: fitsecs("regression"),
+           "regwin":    lambda: wins("regression"),
+           "optwin":    lambda: wins("optimize"),
+           # 120, not the CAP=60 that run was given: the rig kills a
+           # worker at cap plus 60s of grace, so "not finished" there
+           # means two minutes from its start, and fits of up to
+           # ~110s did finish.  Drawn at 60 the unfinished marks sat
+           # BELOW points that finished.
+           "optsecs":   lambda: fitsecs("optimize", 120),
+           "optmae":    lambda: maes(kind="optimize", arm=(
+             "pycap200", "tab2 forest(30), each tree draws its own 200 rows")),
+           "regmae":    lambda: maes(arm=(
+             "pycap200", "tab2 forest(30), each tree draws its own 200 rows"))}
   # `top5`, `labels` and `arms` are off the default list and their pngs live in
   # docs/attic: `top5reg`/`top5opt` carry the same question with the
   # arms that came later, and every arm and measure `arms` drew is in

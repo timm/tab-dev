@@ -17,6 +17,7 @@ that cost the threaded arm more than the others.  Here:
 
 usage: python3 etc/secs.py run [n]       n sets, stratified (default 30)
        python3 etc/secs.py sets [n]      just name them
+       python3 etc/secs.py run 30 regression    -> cache/secsreg.csv
        <interp> etc/secs.py <arm> f.csv budget maxfits [opt]   one arm
 
 A worker prints `fit <wall> <cpu>` per completed fit and stops
@@ -30,7 +31,7 @@ The seconds reported are the min of the fits after the first two
 (pypy needs two to warm; the others lose nothing by it), or the last
 fit when there was no room for three.
 """
-import os, sys, time, random, subprocess
+import os, sys, time, math, glob, random, subprocess
 
 Here  = os.path.dirname(os.path.abspath(__file__))
 Dev   = os.path.dirname(Here)
@@ -38,7 +39,7 @@ Tab   = os.getenv("TAB", os.path.join(os.path.dirname(Dev), "tab"))
 Moot  = os.path.expanduser(os.getenv("MOOT", "~/gits/moot"))
 NN    = os.path.expanduser(os.getenv("NN", "~/tmp/nnenv/bin/python"))
 Out   = os.getenv("SECS", os.path.join(Dev, "cache", "secs.csv"))
-Cap, Grace, Budget, Fits = 120, 60, 20, 5
+Cap, Grace, Budget, Fits = int(os.getenv("CAP", 120)), 60, 20, 5
 Skip  = ("COMPAS53", "mnist_1")      # as ,/run: 85% of a tree arm alone
 Cells, Rows = 950_000, 15_000        # nn.py's memory and time guards
 Seed  = 1234567891 + 1
@@ -52,23 +53,50 @@ def load(file):
   names = rows[0]
   return names, [r for r in rows[1:] if len(r) == len(names)]
 
-def roles(names):
-  "x columns and the klass column: the last one ending in `!`."
-  ks = [j for j, n in enumerate(names) if n.endswith("!")]
+def reg(file):
+  "Is FILE's target a number?  Its place in moot says so."
+  return "/regression/" in file or "/optimize/" in file
+
+def ydists(names, rows):
+  """Each row's distance to heaven over the goal columns -- tab's
+  ydist, off the whole table: logistic of z per goal, 0 or 1 as the
+  goal is to shrink or grow, root mean square over the goals."""
+  gs = {}
+  for j, n in enumerate(names):
+    if n and n[-1] in "+-":
+      v  = [float(r[j]) for r in rows if r[j] != "?"]
+      mu = sum(v) / len(v)
+      sd = (sum((x - mu) ** 2 for x in v) / max(1, len(v) - 1)) ** .5
+      gs[j] = (mu, sd, 0 if n[-1] == "-" else 1)
+  def one(r):
+    d = 0
+    for j, (mu, sd, w) in gs.items():
+      v = mu if r[j] == "?" else float(r[j])
+      z = max(-3, min(3, (v - mu) / (sd + 1e-32)))
+      d += abs(1 / (1 + math.exp(-1.7 * z)) - w) ** 2
+    return (d / len(gs)) ** .5
+  return [one(r) for r in rows]
+
+def roles(names, num=False):
+  """x columns and the target: the last `!` column, a klass -- or, for
+  NUM, the last goal column of any kind, a number."""
+  ks = [j for j, n in enumerate(names)
+        if n and n[-1] in ("+-!" if num else "!")]
   xs = [j for j, n in enumerate(names) if n and n[-1] not in "X-+!"]
   return xs, (ks[-1] if ks else None)
 
 def shape(file):
   "rows, x columns, klasses -- or None if there is nothing to classify."
   names, rows = load(file)
-  xs, k = roles(names)
+  xs, k = roles(names, reg(file))
   if k is None or not xs: return None
+  if reg(file): return len(rows), len(xs), 1      # no klasses to count
   return len(rows), len(xs), len({r[k] for r in rows if r[k] != "?"})
 
 def xy(file):
   "Numbers in, label out, split 80:20.  Syms become codes, `?` nan."
   names, rows = load(file)
-  xs, k = roles(names)
+  xs, k = roles(names, reg(file))
   rows  = [r for r in rows if r[k] != "?"]
   random.Random(Seed).shuffle(rows)
   code = {}
@@ -79,7 +107,8 @@ def xy(file):
       except ValueError: return float("nan")
     return float(code.setdefault((j, v), len(code)))
   X = [[cell(j, r[j]) for j in xs] for r in rows]
-  y = [r[k] for r in rows]
+  y = (ydists(names, rows) if "/optimize/" in file else
+       [float(r[k]) if reg(file) else r[k] for r in rows])
   n = int(.8 * len(rows))
   return X[:n], y[:n], X[n:], y[n:]
 
@@ -96,24 +125,26 @@ def fits(once, budget, most):
 
 def lgbm(file, budget, most, _=None):
   import numpy as np
-  from lightgbm import LGBMClassifier
+  from lightgbm import LGBMClassifier, LGBMRegressor
   X1, y1, X2, _ = xy(file)
   X1, X2 = np.array(X1), np.array(X2)
+  Model = LGBMRegressor if reg(file) else LGBMClassifier
   def once():
-    LGBMClassifier(verbose=-1, n_jobs=1).fit(X1, y1).predict(X2)
+    Model(verbose=-1, n_jobs=1).fit(X1, y1).predict(X2)
   fits(once, budget, most)
 
 def tabicl(file, budget, most, threads="1"):
   "THREADS=0 is as shipped; anything else is that many."
   import inspect, numpy as np, torch
   if int(threads): torch.set_num_threads(int(threads))
-  from tabicl import TabICLClassifier
+  from tabicl import TabICLClassifier, TabICLRegressor
   X1, y1, X2, _ = xy(file)
   X1, X2 = np.array(X1), np.array(X2)
+  Model = TabICLRegressor if reg(file) else TabICLClassifier
   kw = {"device": "cpu", "random_state": 0}
   if int(threads) and "n_jobs" in inspect.signature(
-       TabICLClassifier.__init__).parameters: kw["n_jobs"] = int(threads)
-  model = TabICLClassifier(**kw)
+       Model.__init__).parameters: kw["n_jobs"] = int(threads)
+  model = Model(**kw)
   # The checkpoint loads inside the first fit, and that is a cost of
   # starting python, not of learning: soybean's first fit was 19.8s
   # against 7.5s for every one after.  So load it on a fit too small
@@ -122,13 +153,23 @@ def tabicl(file, budget, most, threads="1"):
   except Exception: pass
   fits(lambda: model.fit(X1, y1).predict(X2), budget, most)
 
-def tab2(file, budget, most, bins="7", cap="0"):
+def tab2(file, budget, most, bins="7", cap="0", few="0", own="0"):
   """tab2.py's forest, under whatever interpreter ran this.  CAP is
   always set, never left to tab2's default, so an arm measured before
-  tab2 grew a cap still means what it meant: no cap."""
+  tab2 grew a cap still means what it meant: no cap.
+
+  On a regression set the forest guesses y[0], and FEW is its whole
+  label budget: each fit draws FEW rows, builds its table from those
+  alone, and grows all its trees on them.  The draw and the table are
+  inside the clock -- they are the work this arm does instead of
+  reading every row."""
   sys.path.insert(0, Tab)
   import tab2 as m
   m.the.bins, m.the.cap = int(bins), int(cap)
+  # OWN is tab2's own row budget, the.few: each tree draws that many
+  # rows for itself (0: all).  FEW, below, is the other style -- one
+  # sample of that many rows, shared by every tree.  Never both.
+  m.the.few = int(own)
   random.seed(Seed)
   data = m.Tab(file)
   rows = data.rows[:]; random.shuffle(rows)
@@ -137,7 +178,13 @@ def tab2(file, budget, most, bins="7", cap="0"):
   def once():
     f = m.Forest(train)
     for r in test: f.guess(r)
-  fits(once, budget, most)
+  def once_num():
+    t = train
+    if int(few):
+      t = data.clone(random.sample(rows[:n], min(int(few), n)))
+    f = m.Forest(t, y=data.ydist if "/optimize/" in file else t.y[0])
+    for r in test: f.guess(r)
+  fits(once_num if reg(file) else once, budget, most)
 
 # ---- driver ------------------------------------------------------------
 One  = {"OMP_NUM_THREADS": "1", "MKL_NUM_THREADS": "1",
@@ -153,19 +200,53 @@ Arms = [  # name, argv before the file, argv after the counts, env, big?
   ("tab2c256", ["pypy3", Self, "tab2"], ["7", "256"], {}, 0),
   ("tabicl1", [NN, Self, "tabicl"],   ["1"],  One, 1),
   ("tabicl",  [NN, Self, "tabicl"],   ["0"],  {},  1)]
+# Regression: the three treatments regmae.png draws.  `tab2f100` is 30
+# trees on one shared sample of 100 rows.
+RegArms = [
+  ("lgbm",     [NN, Self, "lgbm"],      [],                One, 0),
+  ("tab2f100", ["pypy3", Self, "tab2"], ["7", "0", "100"], {},  0),
+  # tab2 as it ships for a numeric target: 30 trees, each drawing its
+  # own 200 rows.  Every training row is binned first, inside the
+  # clock, because any of them may be drawn.
+  ("tab2o200", ["pypy3", Self, "tab2"], ["7", "0", "0", "200"], {}, 0),
+  ("tabicl1",  [NN, Self, "tabicl"],    ["1"],             One, 1)]
 
-def pick(n):
-  "N classify sets: five bands of rows, spread over klasses in each."
+def pick(n, kind="classify"):
+  """N sets of KIND: five bands of rows, spread over klasses in each
+  (or, for regression, where every set has one "klass", over columns)."""
   all_ = []
-  for f in sorted(os.listdir(f"{Moot}/classify")):
+  if kind == "optimize":
+    # One level deeper, so a set is named group/name -- which is also
+    # its path under moot/optimize.  Only sets optmae.png draws: both
+    # other arms scored, and TabICL's file not on the stale list.
+    stale = {l.strip() for l in open(f"{Dev}/STALE-tabicl.txt")
+             if l.strip() and l[0] != "#"}
+    for p in sorted(glob.glob(f"{Moot}/optimize/*/*.csv")):
+      name = p.split("/optimize/")[1][:-4]
+      d = f"{Dev}/cache/optimize/{name}"
+      if (os.path.exists(f"{d}/pyfix100.csv") and
+          os.path.exists(f"{d}/tabicl.csv") and
+          f"optimize/{name}" not in stale):
+        s = shape(p)
+        if s and s[0] > 0: all_.append((s[0], s[2], s[1], name))
+  for f in ([] if kind == "optimize" else
+            sorted(os.listdir(f"{Moot}/{kind}"))):
     if f.endswith(".csv") and f[:-4] not in Skip:
-      s = shape(f"{Moot}/classify/{f}")
-      if s and s[2] > 1: all_.append((s[0], s[2], s[1], f[:-4]))
+      s = shape(f"{Moot}/{kind}/{f}")
+      # Regression: only sets the error chart draws, so the runtime
+      # and the mae figures speak of one corpus -- and never a file
+      # whose rows this loader cannot read (three come back empty).
+      if kind == "regression":
+        if s and s[0] > 0 and os.path.exists(
+             f"{Dev}/cache/regression/{f[:-4]}/pyfix100.csv"):
+          all_.append((s[0], s[2], s[1], f[:-4]))
+      elif s and s[2] > 1: all_.append((s[0], s[2], s[1], f[:-4]))
   all_.sort()
   out, per = [], max(1, n // 5)
   for b in range(5):
     band = sorted(all_[b * len(all_) // 5:(b + 1) * len(all_) // 5],
-                  key=lambda s: (s[1], s[0]))
+                  key=(lambda s: (s[2], s[0])) if kind != "classify"
+                  else (lambda s: (s[1], s[0])))   # as it always was
     for j in range(min(per, len(band))):
       out.append(band[round(j * (len(band) - 1) / max(1, per - 1))])
   return sorted(set(out))
@@ -191,7 +272,12 @@ def one(arm, file, rows, x):
   w, c = min(use, key=lambda t: float(t[0]))
   return "ok", w, c, " ".join(t[0] for t in got)
 
-def run(n):
+def run(n, kind="classify"):
+  # Regression keeps its own file: the arms differ, and a set name may
+  # live in both corpora.
+  Out  = globals()["Out"] if kind == "classify" else os.getenv(
+           "SECSREG", os.path.join(Dev, "cache", "secsopt.csv" if
+                                   kind == "optimize" else "secsreg.csv"))
   done = set()
   if os.path.exists(Out):
     for s in list(open(Out))[1:]: done.add(tuple(s.split(",")[:2]))
@@ -199,11 +285,11 @@ def run(n):
     os.makedirs(os.path.dirname(Out), exist_ok=True)
     with open(Out, "w") as h:
       h.write("set,arm,rows,x,klasses,status,secs,cpu,fits\n")
-  for rows, k, x, name in pick(n):
-    for arm in Arms:
+  for rows, k, x, name in pick(n, kind):
+    for arm in (Arms if kind == "classify" else RegArms):
       if (name, arm[0]) in done: continue
       t = time.time()
-      status, w, c, fs = one(arm, f"{Moot}/classify/{name}.csv", rows, x)
+      status, w, c, fs = one(arm, f"{Moot}/{kind}/{name}.csv", rows, x)
       with open(Out, "a") as h:
         h.write(f"{name},{arm[0]},{rows},{x},{k},{status},{w},{c},{fs}\n")
       print(f"{name:28} {arm[0]:8} {status:8} {w:>10}  "
@@ -211,9 +297,10 @@ def run(n):
 
 if __name__ == "__main__":
   a = sys.argv[1:]
-  if   a and a[0] == "run":  run(int(a[1]) if len(a) > 1 else 30)
+  kind = a[2] if len(a) > 2 else "classify"
+  if   a and a[0] == "run":  run(int(a[1]) if len(a) > 1 else 30, kind)
   elif a and a[0] == "sets":
-    for s in pick(int(a[1]) if len(a) > 1 else 30): print(*s)
+    for s in pick(int(a[1]) if len(a) > 1 else 30, kind): print(*s)
   elif a and a[0] in ("lgbm", "tabicl", "tab2"):
-    globals()[a[0]](a[1], float(a[2]), int(a[3]), *a[4:6])
+    globals()[a[0]](a[1], float(a[2]), int(a[3]), *a[4:8])
   else: print(__doc__)
